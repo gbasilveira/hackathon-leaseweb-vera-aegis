@@ -70,12 +70,15 @@ chmod 664 "$STATE"
 note "fresh store; the chain starts from genesis"
 
 say "5 · Optional SDK for the Claude planner"
-if python3 -c 'import claude_agent_sdk' >/dev/null 2>&1; then
-  note "claude-agent-sdk present"
+PY=/opt/aegis/venv/bin/python3
+[ -x "$PY" ] || PY=python3
+if "$PY" -c 'import claude_agent_sdk' >/dev/null 2>&1; then
+  note "claude-agent-sdk present for $PY"
 else
   note "claude-agent-sdk missing: the model planner will report itself unavailable"
-  note "install it with:"
-  note "  sudo pip install --break-system-packages claude-agent-sdk==0.2.185"
+  note "install it without touching Debian's packages:"
+  note "  sudo python3 -m venv --system-site-packages /opt/aegis/venv"
+  note "  sudo /opt/aegis/venv/bin/pip install claude-agent-sdk==0.2.185"
 fi
 if [ -s /etc/aegis/planner.env ]; then
   note "/etc/aegis/planner.env is populated"

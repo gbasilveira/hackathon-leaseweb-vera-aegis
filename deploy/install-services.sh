@@ -12,7 +12,9 @@ set -eu
 
 SOURCE=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=/opt/aegis
+VENV=/opt/aegis/venv
 UNITS=/etc/systemd/system
+SDK_VERSION=0.2.185
 
 [ "$(id -u)" = 0 ] || { echo "run this with sudo" >&2; exit 1; }
 [ -d /var/lib/aegis ] || { echo "run deploy/provision.sh first" >&2; exit 1; }
@@ -26,13 +28,38 @@ cp -r "$SOURCE/aegis" "$TARGET/"
 find "$TARGET" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 note "copied the package to $TARGET/aegis"
 
-say "2 · Adversary script"
+say "2 · Interpreter"
+# One interpreter for all three services, in a virtual environment that can
+# still see the distribution's libvirt binding. The optional SDK must not go
+# into Debian's python: pip cannot uninstall the typing_extensions that ships
+# with the distribution, because it has no RECORD file, so the install aborts
+# halfway.
+if [ ! -x "$VENV/bin/python3" ]; then
+  python3 -m venv --system-site-packages "$VENV"
+  note "created $VENV with access to system site-packages"
+else
+  note "$VENV already present"
+fi
+"$VENV/bin/python3" -c 'import libvirt' 2>/dev/null \
+  && note "libvirt binding visible inside the environment" \
+  || note "WARNING: libvirt binding not visible; install python3-libvirt"
+if "$VENV/bin/python3" -c 'import claude_agent_sdk' 2>/dev/null; then
+  note "claude-agent-sdk present"
+elif [ "${WITH_CLAUDE:-1}" = 1 ]; then
+  if "$VENV/bin/pip" install -q "claude-agent-sdk==$SDK_VERSION" 2>/dev/null; then
+    note "installed claude-agent-sdk==$SDK_VERSION"
+  else
+    note "could not install the SDK; the model planner will report itself unavailable"
+  fi
+fi
+
+say "3 · Adversary script"
 # A 0750 home directory makes this unreadable to the adversary account, which
 # is where the runbook pointed people and why the script silently never ran.
 install -m 755 "$SOURCE/deploy/attacker.sh" "$TARGET/attacker.sh"
 note "installed to $TARGET/attacker.sh, reachable by the demo-attacker account"
 
-say "3 · Planner credential"
+say "4 · Planner credential"
 mkdir -p /etc/aegis
 if [ ! -f /etc/aegis/planner.env ]; then
   install -m 600 -o aegis-planner -g aegis-planner /dev/null /etc/aegis/planner.env
@@ -43,12 +70,17 @@ else
   note "/etc/aegis/planner.env already exists, left untouched"
 fi
 
-say "4 · Units"
-cp "$SOURCE"/deploy/systemd/aegis-*.service "$UNITS/"
+say "5 · Units"
+for unit in "$SOURCE"/deploy/systemd/aegis-*.service; do
+  # Point every unit at the environment's interpreter.
+  sed "s#^ExecStart=/usr/bin/python3#ExecStart=$VENV/bin/python3#" "$unit" \
+    > "$UNITS/$(basename "$unit")"
+done
 systemctl daemon-reload
+note "units run $VENV/bin/python3"
 note "installed sensor, planner and gateway"
 
-say "5 · Start"
+say "6 · Start"
 # `enable --now` does nothing to a unit that is already active, so on a second
 # run it would copy the new code and leave the old processes serving it. Enable
 # for boot, then restart unconditionally.
@@ -68,6 +100,14 @@ for unit in aegis-sensor aegis-gateway aegis-planner; do
   state=$(systemctl is-active "$unit" 2>/dev/null || true)
   printf '  %-16s %s\n' "$unit" "$state"
 done
+echo
+echo "Run anything by hand with the same interpreter:"
+echo "  cd /opt/aegis && sudo $VENV/bin/python3 -m aegis.live --help"
+echo
+echo "The live console, read-only, on loopback:"
+echo "  cd /opt/aegis && sudo $VENV/bin/python3 -m aegis.live \\"
+echo "      --store /var/lib/aegis/state.json board"
+echo "  then from your laptop: ssh -L 8780:127.0.0.1:8780 ubuntu@<host>"
 echo
 echo "Verify the boundaries, each under its own account:"
 echo "  sudo -u aegis-sensor  python3 -m aegis.live --uri qemu:///system privileges"

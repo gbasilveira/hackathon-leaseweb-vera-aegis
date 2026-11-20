@@ -713,6 +713,30 @@ def cmd_compare(args):
     return 0
 
 
+def cmd_board(args):
+    """Serve a read-only console over the live path.
+
+    The simulator's browser interface reads the fixture engine, with its own
+    digest and its own policy. Showing that beside a hypervisor running this
+    one would put a picture of the wrong system on screen, which is worse than
+    showing no picture. This serves the live path and nothing else, and it has
+    no write path: acting goes through the gateway.
+    """
+    from .board import serve
+
+    server = serve(args.store, args.uri, host=args.host, port=args.port)
+    _say(f"live console on http://{args.host}:{args.port}")
+    _say(f"reading {args.store}")
+    if args.host == "127.0.0.1":
+        _say("loopback only; from a laptop use:")
+        _say(f"  ssh -L {args.port}:127.0.0.1:{args.port} ubuntu@<host>")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.shutdown()
+    return 0
+
+
 def cmd_release(args):
     """Lift containment, once the world allows it.
 
@@ -782,6 +806,10 @@ def main(argv=None):
     observe.add_argument("--once", action="store_true")
     observe.set_defaults(run=cmd_observe)
     sub.add_parser("gateway").set_defaults(run=cmd_gateway)
+    board = sub.add_parser("board")
+    board.add_argument("--host", default="127.0.0.1")
+    board.add_argument("--port", type=int, default=8780)
+    board.set_defaults(run=cmd_board)
     compare = sub.add_parser("compare")
     compare.add_argument("--action", default="network.isolate", choices=sorted(ACTIONS))
     compare.set_defaults(run=cmd_compare)

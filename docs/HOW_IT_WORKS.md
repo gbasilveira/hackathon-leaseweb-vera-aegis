@@ -607,6 +607,39 @@ around it. Reaching for `virsh` here would work and would prove nothing.
 
 ---
 
+## 14b · The live console
+
+`aegis.live board` serves a read-only page over the live path on loopback.
+
+The browser interface that ships with the simulator reads the fixture engine,
+with its own digest and its own policy. Putting that on screen beside a
+hypervisor running this one would show a picture of the wrong system, which is
+worse than showing none, so this reads only the shared store the three services
+write and opens libvirt read-only for topology.
+
+It has no write path. There is no form, no action and no endpoint that changes
+anything; a POST is refused. An operator who wants to act uses the CLI, which
+goes through the gateway.
+
+```sh
+cd /opt/aegis && sudo ./venv/bin/python3 -m aegis.live \
+    --store /var/lib/aegis/state.json board
+ssh -L 8780:127.0.0.1:8780 ubuntu@<host>     # from the presenting laptop
+```
+
+It shows the measured topology as a graph, with a contained guest marked and
+every node the system computed to be shared and critical outlined, because
+that computation is what denies a broad action; a dashed edge is a service
+dependency declared in the catalogue rather than observed on the hypervisor.
+Beside it: governance decisions with their reasons, capability handles and
+their status, the hypervisor observations the sensor sealed, the count of guest
+reports excluded from decision facts, and the journal with its chain state and
+head.
+
+The page refreshes itself every four seconds and is rendered server-side, so it
+needs no scripts and no network of its own. `/state.json` returns the same data
+for anyone who would rather read it raw.
+
 ## 15 · The module map
 
 | File | Owns |
@@ -617,16 +650,21 @@ around it. Reaching for `virsh` here would work and would prove nothing.
 | `aegis/libvirt_plane.py` | discovery, observation, actuation, independent re-read |
 | `aegis/privsep.py` | the privilege assertions each process makes about itself |
 | `aegis/gateway.py` | the only writable plane, the one-operation socket, the shared store |
-| `aegis/live.py` | the derived policy, the planner, the operator console |
+| `aegis/policy.py` | the authorisation policy, which the gateway runs too |
+| `aegis/claude_planner.py` | the model's five tools and nothing else |
+| `aegis/board.py` | the read-only live console |
+| `aegis/live.py` | the planner loop and the operator console |
 | `deploy/provision.sh` | the host: guests, networks, accounts, shared state |
 | `deploy/install-services.sh` | the three units |
 | `deploy/attacker.sh` | the adversary, sharing no code with any of the above |
 | `deploy/enable-acl.sh` | libvirt's own authorisation, opt-in |
+| `deploy/reset-demo.sh` | a clean pre-pitch state |
 
 The simulator path — `aegis/core.py`, `governance.py`, `verifier.py` and
 `scenarios/` — is untouched by this work and remains the offline fallback for a
 machine with no hypervisor. It still uses the global context digest and the old
-hard-coded policy facts. The browser console reads only that path.
+hard-coded policy facts, and its own browser console still reads only that
+path. Use `aegis.live board` for anything describing the hypervisor.
 
 ---
 

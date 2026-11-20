@@ -35,6 +35,7 @@ denial in act 2 follows from it arithmetically.
 
 | Time | Operator action | What to show |
 |---|---|---|
+| before | `sudo ./deploy/reset-demo.sh`, then open the console in a browser tab | Links up, nothing contained, three services active. Leave the console visible for the whole pitch; it updates itself as each act runs. |
 | 0:00–0:40 | `aegis.live topology` | Three guests, three tenants, two networks. One network carries two tenants and is therefore critical. Nothing here was declared; it was read from the hypervisor. |
 | 0:40–1:10 | `aegis.live privileges` | The planner has egress and no hypervisor. The gateway has the hypervisor and no egress. Each process verified this by attempting the access it is denied. |
 | 1:10–1:40 | In a second terminal: `sudo -u demo-attacker /opt/aegis/attacker.sh tenant-b--app` | A legitimate operator credential, stock `virsh`, no project code. Broad enumeration, then bulk snapshots, then probing another tenant. |
