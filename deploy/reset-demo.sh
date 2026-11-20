@@ -21,16 +21,38 @@ say() { printf '\033[1m%s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
 
 say "1 · Release every contained guest"
-for guest in $GUESTS; do
-  virsh dominfo "$guest" >/dev/null 2>&1 || continue
-  macs=$(virsh dumpxml "$guest" 2>/dev/null | sed -n "s/.*<mac address='\([^']*\)'.*/\1/p")
-  for mac in $macs; do
-    virsh domif-setlink "$guest" "$mac" up --live >/dev/null 2>&1 || true
-  done
-  state=$(virsh domstate "$guest" 2>/dev/null || echo unknown)
-  [ "$state" = paused ] && virsh resume "$guest" >/dev/null 2>&1 || true
-  note "$guest: links up, state $(virsh domstate "$guest" 2>/dev/null || echo unknown)"
-done
+# Use the adapter, not virsh. virsh domif-setlink was failing here with its
+# error discarded, so the script reported links up while the guests stayed
+# contained and the walkthrough then started from the wrong state. The adapter
+# path is the one the gateway uses and is known to work on this host.
+cd "$(dirname "$0")/.." 2>/dev/null || true
+python3 - "$GUESTS" <<'PYEOF' || echo "  WARNING: release failed; see the error above"
+import sys
+from aegis.libvirt_plane import LibvirtControlPlane
+from aegis.controlplane import PlaneError
+
+plane = LibvirtControlPlane("qemu:///system")
+for guest in sys.argv[1].split():
+    state = plane.read_state(guest)
+    if not state:
+        print(f"  {guest}: not defined")
+        continue
+    if state.get("isolated"):
+        try:
+            effect = plane.actuate("network.restore", guest)
+            print(f"  {guest}: restored {effect.get('interfaces')}")
+        except PlaneError as error:
+            print(f"  {guest}: RESTORE FAILED: {error}")
+    if state.get("state") == "paused":
+        try:
+            plane.actuate("vm.resume", guest)
+            print(f"  {guest}: resumed")
+        except PlaneError as error:
+            print(f"  {guest}: RESUME FAILED: {error}")
+    after = plane.read_state(guest)
+    mark = "" if not after.get("isolated") else "  <-- STILL CONTAINED"
+    print(f"  {guest}: links {after.get('links')} state {after.get('state')}{mark}")
+PYEOF
 
 say "2 · Remove rehearsal snapshots"
 for guest in $GUESTS; do

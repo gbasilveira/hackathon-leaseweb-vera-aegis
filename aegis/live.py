@@ -332,6 +332,12 @@ def cmd_demo(args):
         )
     if not shared:
         _say("  no shared infrastructure observed (single tenant host)")
+    if topology["nodes"].get(target, {}).get("link") == "down":
+        _say()
+        _say(f"\033[31m{target} is already contained, so act 5 would show no change.\033[0m")
+        _say("Release it first and run this again:")
+        _say(f"  sudo ./deploy/reset-demo.sh    # or: aegis.live release --target {target}")
+        return 1
 
     _act(2, "The broad action the alert asked for")
     broad = next((n["id"] for n in shared if n["kind"] == "net"), None)
@@ -396,6 +402,8 @@ def cmd_demo(args):
         _say(f"  before: {result['before']}")
         _say(f"  after : {result['after']}")
         _say(f"  checks: {result['checks']}")
+        if result.get("no_change_required"):
+            _say("  \033[33mnothing required changing: the target was already in this state\033[0m")
     for line in result.get("reasons", []):
         _say(f"    · {line}")
 

@@ -197,6 +197,10 @@ class Gateway:
         capability["status"] = "consumed"
         self.store.put(capability)
         after = self.plane.read_state(target)
+        # An action that found nothing to change still satisfies its effect
+        # check, which is true and unhelpful: it hides a target that was
+        # already in the desired state before the handle was spent.
+        no_op = isinstance(effect, dict) and effect.get("interfaces") == []
         # Three-valued on purpose. A target that cannot be re-read is not a
         # failed containment, it is an unknown one, and saying so is the whole
         # point of verifying independently of the actuator's return value.
@@ -223,8 +227,15 @@ class Gateway:
                 "before": before,
                 "after": after,
                 "effect": effect,
+                "no_change_required": no_op,
             }
-        ) | {"result": result, "checks": checks, "before": before, "after": after}
+        ) | {
+            "result": result,
+            "checks": checks,
+            "before": before,
+            "after": after,
+            "no_change_required": no_op,
+        }
 
 
 class MemoryStore:
