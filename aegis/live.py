@@ -705,10 +705,27 @@ def cmd_compare(args):
         _say("would propose nothing")
 
     _act("C", "What this shows")
-    if heuristic and not spec:
+    heuristic_verdict = verdict(heuristic)
+    refused = heuristic_verdict and heuristic_verdict["result"] != "ALLOW"
+    if heuristic and refused and not spec:
+        # The strongest outcome, and the one worth naming: two independent
+        # layers each caught the same bad proposal, and neither had to be
+        # right on its own.
+        _say(f"The counter proposed containment. The policy refused it: "
+             f"{heuristic_verdict['reason']}.")
+        _say("The model declined separately, from the same evidence.")
+        _say()
+        _say("Three layers, none of which had to be right alone. The counter")
+        _say("cannot tell maintenance from compromise. The model can reason")
+        _say("about it. The policy bounds the damage when either is wrong, and")
+        _say("the gateway enforces the policy against live libvirt.")
+    elif heuristic and not spec:
         _say("The counter fired and the model did not.")
         _say("Snapshotting is ordinary maintenance; a count is not a compromise.")
         _say("Judging that is the model's job. Bounding the damage is the policy's.")
+    elif heuristic and refused and spec:
+        _say(f"The policy refused the counter's proposal: {heuristic_verdict['reason']}.")
+        _say("The model proposed something the policy allows.")
     elif spec and heuristic and spec["target_id"] == heuristic["target_id"]:
         _say("Both reached the same target. The model explained why; the counter did not.")
     elif spec and not heuristic:
