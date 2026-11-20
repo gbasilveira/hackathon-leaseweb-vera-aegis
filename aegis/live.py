@@ -291,17 +291,26 @@ def cmd_topology(args):
     topology = _plane(args, writable=False).discover()
     _say(f"host: {topology['host']}")
     _say()
-    _say(f"{'node':<34} {'kind':<14} {'tenant':<16} shared  criticality")
+    _say(
+        f"{'node':<30} {'kind':<10} {'tenant':<16} {'shared':<7} {'criticality':<12} link"
+    )
     for node_id, node in sorted(topology["nodes"].items()):
+        link = node.get("link")
+        contained = link == "down"
         _say(
-            f"{node_id:<34} {node.get('kind',''):<14} {node.get('tenant_id',''):<16} "
-            f"{str(bool(node.get('shared'))):<7} {node.get('criticality','')}"
+            f"{node_id:<30} {node.get('kind',''):<10} {node.get('tenant_id',''):<16} "
+            f"{str(bool(node.get('shared'))):<7} {node.get('criticality',''):<12} "
+            + (f"\033[31m{link} (contained)\033[0m" if contained else (link or ""))
             + (
                 f"   observed tenants: {', '.join(node['observed_tenants'])}"
                 if node.get("observed_tenants")
                 else ""
             )
         )
+    if any(node.get("link") == "down" for node in topology["nodes"].values()):
+        _say()
+        _say("Guests showing 'contained' have had their interface link dropped.")
+        _say("Release one with: aegis.live release --target <guest>")
     _say()
     for edge in topology["edges"]:
         origin = " (catalogue)" if edge.get("source_of_truth") else ""
