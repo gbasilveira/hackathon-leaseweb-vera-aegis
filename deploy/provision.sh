@@ -163,10 +163,24 @@ mkdir -p "$BASE_DIR"
 # directory carries the shared group and the setgid bit: files created by one
 # stay writable by the others. A root-owned 0755 directory is what made the
 # sensor die on its first write.
-chown -R "root:$SHARED_GROUP" "$BASE_DIR"
+#
+# Only the shared JSON state gets the group. Not the disk images: those belong
+# to libvirt, which applies its own dynamic ownership when a domain starts, and
+# a recursive chown here takes the qcow2 files away from qemu. Running guests
+# survive it because their descriptors are already open, so the damage shows up
+# later and elsewhere: a snapshot fails, and a guest restart cannot open its
+# own disk.
+chown "root:$SHARED_GROUP" "$BASE_DIR" "$CATALOGUE" "$STATE"
 chmod 2775 "$BASE_DIR"
 chmod 664 "$CATALOGUE" "$STATE"
 note "state directory $BASE_DIR is root:$SHARED_GROUP 2775"
+# Repair what an earlier recursive chown may have taken from qemu.
+if id libvirt-qemu >/dev/null 2>&1 && [ -d "$IMAGES" ]; then
+  chown root:root "$IMAGES"
+  chmod 711 "$IMAGES"
+  chown libvirt-qemu:kvm "$IMAGES"/*.qcow2 2>/dev/null || true
+  note "disk images restored to libvirt-qemu:kvm in $IMAGES"
+fi
 note "catalogue at $CATALOGUE (the CMDB stand-in; the walkthrough writes here)"
 
 say "6 · Accounts for the privilege split"

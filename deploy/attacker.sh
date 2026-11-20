@@ -37,6 +37,16 @@ for index in 1 2 3; do
   try "virsh snapshot-create-as --domain $TARGET --name attacker-$index --description 'bulk capture'"
 done
 try "virsh snapshot-list --domain $TARGET"
+# This is the signal the defence keys on, so say plainly whether it exists.
+# A silent failure here looks exactly like a defence that noticed nothing.
+captured=$(virsh snapshot-list --domain "$TARGET" --name 2>/dev/null | grep -c . || true)
+if [ "${captured:-0}" -gt 0 ]; then
+  printf '  \033[1m=> %s snapshot(s) now exist on %s. This is hypervisor state.\033[0m\n' "$captured" "$TARGET"
+else
+  printf '  \033[31m=> no snapshots were created, so there is nothing for the defence to see.\033[0m\n'
+  printf '     Check disk ownership: ls -la /var/lib/aegis/images/\n'
+  printf '     The qcow2 files must belong to libvirt-qemu. Repair with: sudo ./deploy/provision.sh\n'
+fi
 
 step "probe guests belonging to other tenants"
 for guest in $(virsh list --all --name 2>/dev/null | grep -v "^$TARGET$" | grep -v '^$'); do
