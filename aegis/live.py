@@ -557,14 +557,20 @@ def cmd_plan(args):
         if not topology:
             _say("no topology published yet; is the sensor running?")
         else:
-            incident = LiveIncident(store=store, topology=topology)
-            target, why = _suspect(store.entries, topology)
-            if not target:
-                _say("no anomaly in the sealed hypervisor observations")
+            spec, notes = _candidate(args, store, topology)
+            for note in notes:
+                _say(f"  {note}")
+            if spec is None:
+                _say("nothing proposed this cycle")
             else:
-                _say(f"suspect {target}: {why}")
+                _say(f"proposing {spec['action_type']} on {spec['target_id']}")
+                _say(f"  because: {spec['rationale']}")
+                incident = LiveIncident(store=store, topology=topology)
                 proposal = incident.propose(
-                    args.action, target, why, [f"libvirt:{target}"]
+                    spec["action_type"],
+                    spec["target_id"],
+                    spec["rationale"],
+                    spec["evidence_refs"],
                 )
                 decision = incident.evaluate(proposal)
                 _say(f"  -> {decision['result']} / {decision['reason']}")
@@ -582,6 +588,129 @@ def cmd_plan(args):
         if args.once:
             return 0
         time.sleep(args.interval)
+
+
+def _candidate(args, store, topology):
+    """What to propose this cycle, and how it was arrived at.
+
+    With `--planner claude` the model does the reasoning. With `auto` it does,
+    and the deterministic heuristic covers a cycle where the model is
+    unavailable, declines or fails, so a planner loop degrades instead of
+    dying. Either way the proposal goes through the identical deterministic
+    path afterwards, and the gateway re-runs the policy against live libvirt
+    before anything happens.
+    """
+    notes = []
+    if args.planner in ("auto", "claude"):
+        from .claude_planner import plan as claude_plan
+
+        spec, claude_notes = claude_plan(store, topology)
+        notes.extend(claude_notes)
+        if spec is not None:
+            notes.append("source: claude")
+            return spec, notes
+        if args.planner == "claude":
+            return None, notes
+        notes.append("falling back to the deterministic heuristic")
+    target, why = _suspect(store.entries, topology)
+    if not target:
+        notes.append("no anomaly in the sealed hypervisor observations")
+        return None, notes
+    notes.append("source: deterministic heuristic")
+    return {
+        "action_type": args.action,
+        "target_id": target,
+        "rationale": why,
+        "evidence_refs": [f"libvirt:{target}"],
+    }, notes
+
+
+def cmd_compare(args):
+    """Run both planners on the same observations, and execute neither.
+
+    This exists to answer the question an autonomous defence always gets:
+    what stops it from containing a legitimate workload? The honest answer is
+    that the counter-based heuristic does not, and that judging whether
+    containment is warranted is what the model is for. Showing both on
+    identical evidence is more useful than claiming either is right.
+
+    Nothing is executed. Both columns stop at the policy verdict.
+    """
+    from .gateway import FileStore
+
+    store = FileStore(args.store)
+    topology = store.topology()
+    if not topology:
+        _say("no topology published yet; is the sensor running?")
+        return 1
+
+    observations = [
+        entry for entry in store.entries
+        if entry.get("event_type") == "hypervisor.observed"
+    ]
+    excluded = [
+        entry for entry in store.entries if entry.get("event_type") == "guest.reported"
+    ]
+    _say(f"{len(observations)} sealed hypervisor observation(s)")
+    _say(f"{len(excluded)} guest report(s), excluded from decision facts")
+
+    def verdict(spec):
+        if spec is None:
+            return None
+        return decide(
+            topology, spec["action_type"], spec["target_id"], spec["evidence_refs"]
+        )
+
+    _act("A", "Deterministic heuristic")
+    target, why = _suspect(store.entries, topology)
+    heuristic = (
+        {
+            "action_type": args.action,
+            "target_id": target,
+            "rationale": why,
+            "evidence_refs": [f"libvirt:{target}"],
+        }
+        if target
+        else None
+    )
+    if heuristic:
+        _say(f"would propose {args.action} on {target}")
+        _say(f"  reasoning: {why}")
+        outcome = verdict(heuristic)
+        _say(f"  policy: {outcome['result']} / {outcome['reason']}")
+        if outcome["result"] == "ALLOW":
+            _say("  \033[33mthis would have contained a running workload\033[0m")
+    else:
+        _say("would propose nothing")
+
+    _act("B", "Claude")
+    from .claude_planner import plan as claude_plan
+
+    spec, notes = claude_plan(store, topology)
+    for note in notes:
+        _say(f"  {note}")
+    if spec:
+        _say(f"would propose {spec['action_type']} on {spec['target_id']}")
+        outcome = verdict(spec)
+        _say(f"  policy: {outcome['result']} / {outcome['reason']}")
+    else:
+        _say("would propose nothing")
+
+    _act("C", "What this shows")
+    if heuristic and not spec:
+        _say("The counter fired and the model did not.")
+        _say("Snapshotting is ordinary maintenance; a count is not a compromise.")
+        _say("Judging that is the model's job. Bounding the damage is the policy's.")
+    elif spec and heuristic and spec["target_id"] == heuristic["target_id"]:
+        _say("Both reached the same target. The model explained why; the counter did not.")
+    elif spec and not heuristic:
+        _say("The model saw something the counter has no way to express.")
+    else:
+        _say("Neither proposed containment on this evidence.")
+    _say()
+    _say("Neither column executed anything. The gateway re-runs this policy")
+    _say("against live libvirt before any handle is spent, whoever proposed it.")
+    return 0
 
 
 def cmd_release(args):
@@ -653,10 +782,19 @@ def main(argv=None):
     observe.add_argument("--once", action="store_true")
     observe.set_defaults(run=cmd_observe)
     sub.add_parser("gateway").set_defaults(run=cmd_gateway)
+    compare = sub.add_parser("compare")
+    compare.add_argument("--action", default="network.isolate", choices=sorted(ACTIONS))
+    compare.set_defaults(run=cmd_compare)
     plan = sub.add_parser("plan")
     plan.add_argument("--action", default="network.isolate", choices=sorted(ACTIONS))
     plan.add_argument("--interval", type=float, default=15.0)
     plan.add_argument("--once", action="store_true")
+    plan.add_argument(
+        "--planner",
+        default="auto",
+        choices=["auto", "claude", "heuristic"],
+        help="auto uses Claude and falls back to the heuristic for a cycle",
+    )
     plan.set_defaults(run=cmd_plan)
     release = sub.add_parser("release")
     release.add_argument("--target", required=True)

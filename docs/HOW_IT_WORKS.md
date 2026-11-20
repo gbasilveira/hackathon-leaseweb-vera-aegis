@@ -39,7 +39,7 @@ spent.
 | `tenant-c--svc` | tenant-c | critical | `aegis-shared` |
 | `tenant-b--sandbox` | tenant-b | normal | `aegis-private` |
 
-Three guests, three tenants, two networks. The arrangement is the point:
+Three guests across **two** tenants, on two networks. The arrangement is the point:
 `aegis-shared` carries two tenants and `aegis-private` carries one, so the
 system can *measure* which infrastructure is shared instead of being told.
 
@@ -113,9 +113,10 @@ Runs as `aegis-planner`. **Holds no libvirt access at all.** Every fifteen
 seconds:
 
 1. Reads the published topology and the sealed journal from the store.
-2. `_suspect()` picks a target: the guest with the highest snapshot count,
-   skipping any whose link is already down. This is a placeholder for a model
-   and reads no guest-supplied field.
+2. Decides what, if anything, to propose. With `--planner claude` the model
+   does it; with `auto` the model does it and a deterministic heuristic covers
+   a cycle where the model is unavailable, declines or fails, so the loop
+   degrades instead of dying. `--planner heuristic` uses only the counter.
 3. `propose()` — builds the proposal and hashes it.
 4. `evaluate()` — runs the policy against the **published** topology.
 5. `issue()` — on ALLOW, mints a capability.
@@ -137,6 +138,55 @@ refused.
 It has network egress, which is the privilege the gateway is denied. Its model
 credential lives in `/etc/aegis/planner.env`, mode 0600, outside the
 repository.
+
+#### What the model can reach
+
+`aegis/claude_planner.py` gives Claude five tools and nothing else. Four are
+reads — the topology, the sealed observations, the blast radius of a candidate
+action, and a channel for reporting something a human should see. The fifth
+records one proposal. Policy evaluation, capability issuance and execution all
+happen after the model has stopped talking.
+
+Hooks are deliberately not used to restrict it. Only five tools exist, which
+behaves identically across SDK versions whose hook signatures differ.
+
+The division is the project rather than a limitation of it. The gateway re-runs
+the policy against live libvirt for every handle, so a model proposing
+something forbidden is refused by the same code that refuses a compromised
+planner, and `tests/test_sabotage.py` does not care which of the two sent it.
+
+#### The counter and the model, on identical evidence
+
+`aegis.live compare` runs both planners over the same sealed observations and
+executes neither. It exists to answer the question an autonomous defence always
+gets: what stops it from containing a legitimate workload?
+
+Observed on a store carrying a rising snapshot count:
+
+```
+── Act A · Deterministic heuristic
+would propose vm.suspend on test
+  reasoning: 24 snapshots observed on this guest
+  policy: ALLOW / ALLOW_SCOPED_REVERSIBLE
+  this would have contained a running workload
+
+── Act B · Claude
+  claude: I'm submitting no proposal, because the observations don't justify containment.
+  claude: Nothing observed says the guest is misbehaving. I have no evidence of an
+          attack, a resource anomaly or a bad state. The one guest report was
+          excluded from my facts, so I can't act on it.
+  claude: A human may want to look at why one domain reports under two tenant
+          attributions. That is a data-quality oddity, not a containment trigger.
+  claude submitted no proposal
+```
+
+The counter fires; the model does not. Snapshotting is ordinary maintenance and
+a count is not a compromise. Judging that is what the model is for, and
+bounding the damage when the judgement is wrong is what the policy is for.
+
+In that run the model also noticed a tenant-attribution inconsistency in the
+seeded data and escalated it rather than acting on it, and confirmed it had not
+acted on the excluded guest report.
 
 ### The gateway — `aegis.live gateway`
 
@@ -600,9 +650,70 @@ worth making: *the mechanism does not require trusting the model.*
 It remains a single host, with no federated identity and no cloud control
 plane.
 
+### What containment does and does not reach
+
+Isolating a guest's interface link is not the same as revoking the compromised
+operator credential. The adversary holds libvirt access; the gateway changes a
+guest's network. Those are different capabilities, and the credential is
+untouched: whoever holds it can still call the management API and perform
+operations that do not depend on that guest's connectivity.
+
+So the accurate claim is narrow:
+
+> VERA executed and independently verified a context-authorised containment
+> action on a real virtual machine, and refused one whose blast radius had
+> moved.
+
+Not "VERA stopped the attack". Revoking operator credentials is outside what
+this demonstrates, and would need an identity provider this layer does not
+have.
+
+Likewise, re-reading the domain XML and seeing `<link state='down'/>` confirms
+the hypervisor's own view of that interface. It does not prove every
+communication path to the guest is closed: a second interface, a serial
+console, a shared filesystem or anything the host offers the guest are outside
+what this check covers.
+
+### What the hash chain is worth
+
+The chain detects an edit that is not accompanied by resealing, which is the
+realistic accident and the careless tamper. An adversary with write access to
+the whole store can rewrite an entry and recompute every hash after it, and
+without an external anchor there is nothing to compare the new head against.
+
+Two things raise the bar without closing it. The gateway verifies the chain
+before spending any handle and refuses everything if it is broken, so tampering
+disables the actuator rather than going unnoticed. And publishing the head at
+handover gives a value a later rewrite cannot match.
+
+It is not a signature and it is not non-repudiation. Anchoring the head
+externally remains an operator decision the code does not pretend to make.
+
+### Dependencies and licensing
+
+The original code here is Apache-2.0, which permits commercial and
+non-commercial reuse. The components it runs against are not:
+
+| Component | License | How this project uses it |
+|---|---|---|
+| QEMU | GPLv2 | provided by the host; invoked by libvirt, never linked or redistributed |
+| libvirt library | LGPLv2.1 or later | called at runtime through its Python bindings |
+| libvirt daemon | GPLv2 or later | provided by the host as a service |
+| `libvirt-python` | LGPLv2.1 or later | imported at runtime, installed from the distribution |
+| `claude-agent-sdk` | vendor terms | optional, pinned in `pyproject.toml` |
+| Cytoscape (simulator UI) | MIT | vendored, see `aegis/web/vendor/` |
+
+Nothing here is statically linked and nothing is redistributed in this
+repository, so Apache-2.0 on the original code stands. Anyone redistributing a
+combined image or appliance that bundles QEMU and libvirt needs to satisfy
+those licenses for that distribution, and should produce a full dependency
+inventory first. See [LICENSING.md](LICENSING.md) and
+[CLAUDE-LICENSES.md](CLAUDE-LICENSES.md).
+
 ### Unvalidated
 
-`deploy/enable-acl.sh`, which puts libvirt's polkit access driver in front of
+**Tenant enforcement by libvirt itself.** `deploy/enable-acl.sh`, which puts
+libvirt's polkit access driver in front of
 tenant scoping so that cross-tenant denial is enforced by libvirtd rather than
 asserted by us. It is opt-in, reversible, and grants root and the service
 accounts full access first so a mistake cannot lock an operator out of their own

@@ -40,7 +40,8 @@ denial in act 2 follows from it arithmetically.
 | 1:10–1:40 | In a second terminal: `sudo -u demo-attacker /opt/aegis/attacker.sh tenant-b--app` | A legitimate operator credential, stock `virsh`, no project code. Broad enumeration, then bulk snapshots, then probing another tenant. |
 | 1:40–3:30 | `aegis.live demo --target tenant-b--app` | Acts 1 to 5. The broad action is refused. The scoped one earns a single-use handle. An unrelated service dependency appears and the handle survives — the mechanism is precise, not merely strict. Then it executes, and `isolated: True` is read back from the hypervisor, not reported by the actuator. |
 | 3:30–4:30 | Same run, acts 6 and 7 | A critical tenant-c service starts depending on the target. The pending handle is refused, and the refusal names that service and says the blast radius moved from one tenant to two. Re-evaluated, the same proposal is now denied outright. |
-| 4:30–5:00 | Same run, act 8 | The sealed journal, its head, and an entry edited live so the chain breaks at a named index. |
+| 4:15–4:40 | `aegis.live compare` | The counter and the model on identical evidence. The counter proposes containment on a snapshot count and the policy would allow it; the model declines and says why. This is the answer to "what stops it containing a legitimate workload". |
+| 4:40–5:00 | Same run, act 8 | The sealed journal, its head, and an entry edited live so the chain breaks at a named index. |
 
 ### The three processes
 
