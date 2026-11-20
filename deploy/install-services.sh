@@ -40,9 +40,15 @@ if [ ! -x "$VENV/bin/python3" ]; then
 else
   note "$VENV already present"
 fi
-"$VENV/bin/python3" -c 'import libvirt' 2>/dev/null \
-  && note "libvirt binding visible inside the environment" \
-  || note "WARNING: libvirt binding not visible; install python3-libvirt"
+if "$VENV/bin/python3" -c 'import libvirt' 2>/dev/null; then
+  note "libvirt binding visible inside the environment"
+else
+  # Not fatal. The environment is only used by the planner, which is forbidden
+  # libvirt anyway, so a missing binding there costs nothing. It is reported
+  # because it usually means the environment was built against a different
+  # interpreter than the one python3-libvirt was installed for.
+  note "libvirt not visible in the environment; only the planner uses it, so this is fine"
+fi
 if "$VENV/bin/python3" -c 'import claude_agent_sdk' 2>/dev/null; then
   note "claude-agent-sdk present"
 elif [ "${WITH_CLAUDE:-1}" = 1 ]; then
@@ -71,13 +77,28 @@ else
 fi
 
 say "5 · Units"
+# Each service gets the interpreter that can do its job, which turns out to
+# mirror the privilege split exactly. The sensor and the gateway need the
+# libvirt binding and never a model; they use the distribution's python, where
+# python3-libvirt is installed. The planner needs the SDK and must never reach
+# libvirt; it uses the environment. Pointing all three at the environment broke
+# the sensor and the gateway on a host where it could not see the binding.
 for unit in "$SOURCE"/deploy/systemd/aegis-*.service; do
-  # Point every unit at the environment's interpreter.
-  sed "s#^ExecStart=/usr/bin/python3#ExecStart=$VENV/bin/python3#" "$unit" \
-    > "$UNITS/$(basename "$unit")"
+  name=$(basename "$unit")
+  if [ "$name" = aegis-planner.service ] && [ -x "$VENV/bin/python3" ]; then
+    sed "s#^ExecStart=/usr/bin/python3#ExecStart=$VENV/bin/python3#" "$unit" > "$UNITS/$name"
+    note "$name runs $VENV/bin/python3"
+  else
+    cp "$unit" "$UNITS/$name"
+    note "$name runs /usr/bin/python3"
+  fi
 done
 systemctl daemon-reload
-note "units run $VENV/bin/python3"
+
+# A service pointed at an interpreter that cannot import what it needs fails on
+# start, and Restart=on-failure makes that look briefly healthy.
+/usr/bin/python3 -c 'import libvirt' 2>/dev/null \
+  || note "WARNING: /usr/bin/python3 cannot import libvirt; sensor and gateway will fail"
 note "installed sensor, planner and gateway"
 
 say "6 · Start"
@@ -101,11 +122,14 @@ for unit in aegis-sensor aegis-gateway aegis-planner; do
   printf '  %-16s %s\n' "$unit" "$state"
 done
 echo
-echo "Run anything by hand with the same interpreter:"
-echo "  cd /opt/aegis && sudo $VENV/bin/python3 -m aegis.live --help"
+echo "Run anything that touches libvirt with the distribution interpreter:"
+echo "  cd /opt/aegis && sudo python3 -m aegis.live --help"
+echo "Run the model planner or compare with the environment:"
+echo "  cd /opt/aegis && sudo sh -c 'export \$(cat /etc/aegis/planner.env) && \\"
+echo "      $VENV/bin/python3 -m aegis.live --store /var/lib/aegis/state.json compare'"
 echo
 echo "The live console, read-only, on loopback:"
-echo "  cd /opt/aegis && sudo $VENV/bin/python3 -m aegis.live \\"
+echo "  cd /opt/aegis && sudo python3 -m aegis.live \\"
 echo "      --store /var/lib/aegis/state.json board"
 echo "  then from your laptop: ssh -L 8780:127.0.0.1:8780 ubuntu@<host>"
 echo
