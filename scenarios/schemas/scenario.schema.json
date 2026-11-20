@@ -1,0 +1,509 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AegisControl synthetic incident scenario",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "description",
+    "incident",
+    "initial_state",
+    "processes",
+    "tenants",
+    "assets",
+    "identities",
+    "sessions",
+    "dependencies",
+    "events",
+    "proposals",
+    "policies",
+    "transitions",
+    "actors",
+    "roles",
+    "metadata",
+    "success_criteria"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "name": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "incident": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenant_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "initial_state": {
+      "$ref": "#/$defs/id"
+    },
+    "transitions": {
+      "$ref": "#/$defs/transitions"
+    },
+    "processes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "initial_state",
+          "transitions"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "initial_state": {
+            "$ref": "#/$defs/id"
+          },
+          "transitions": {
+            "$ref": "#/$defs/transitions"
+          }
+        }
+      }
+    },
+    "tenants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/entity"
+          },
+          {
+            "required": [
+              "tenant_id",
+              "type",
+              "state",
+              "criticality",
+              "shared"
+            ],
+            "properties": {
+              "tenant_id": {
+                "$ref": "#/$defs/id"
+              },
+              "type": {
+                "enum": [
+                  "vm",
+                  "host",
+                  "service"
+                ]
+              },
+              "state": {
+                "enum": [
+                  "running",
+                  "stopped"
+                ]
+              },
+              "criticality": {
+                "enum": [
+                  "normal",
+                  "critical"
+                ]
+              },
+              "shared": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "identities": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/principal"
+          },
+          {
+            "required": [
+              "tenant_id"
+            ],
+            "properties": {
+              "tenant_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/principal"
+          },
+          {
+            "required": [
+              "identity_id",
+              "tenant_id",
+              "valid_for_seconds"
+            ],
+            "properties": {
+              "identity_id": {
+                "$ref": "#/$defs/id"
+              },
+              "tenant_id": {
+                "$ref": "#/$defs/id"
+              },
+              "valid_for_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400
+              }
+            }
+          }
+        ]
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dependency"
+      }
+    },
+    "change": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/dependency"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "actor_id",
+          "target_id",
+          "outcome",
+          "payload"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "event_type": {
+            "$ref": "#/$defs/id"
+          },
+          "actor_id": {
+            "$ref": "#/$defs/id"
+          },
+          "target_id": {
+            "$ref": "#/$defs/id"
+          },
+          "outcome": {
+            "$ref": "#/$defs/id"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "permission_check": {
+            "$ref": "#/$defs/permission_check"
+          },
+          "source": {
+            "$ref": "#/$defs/id"
+          },
+          "trust_level": {
+            "enum": [
+              "synthetic_fixture",
+              "untrusted"
+            ]
+          }
+        }
+      }
+    },
+    "probe": {
+      "$ref": "#/$defs/permission_check"
+    },
+    "alternative_proposal_id": {
+      "$ref": "#/$defs/id"
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "phase",
+          "action_type",
+          "target_id",
+          "parameters",
+          "rationale",
+          "expected_effect",
+          "assumptions",
+          "evidence_refs"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "phase": {
+            "enum": [
+              "initial",
+              "alternative"
+            ]
+          },
+          "action_type": {
+            "$ref": "#/$defs/id"
+          },
+          "target_id": {
+            "$ref": "#/$defs/id"
+          },
+          "parameters": {
+            "type": "object"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "expected_effect": {
+            "type": "string"
+          },
+          "assumptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/id"
+            }
+          }
+        }
+      }
+    },
+    "actors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "role"
+        ]
+      }
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "rules"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "version": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "priority",
+                "when",
+                "result",
+                "reason"
+              ],
+              "properties": {
+                "priority": {
+                  "type": "integer"
+                },
+                "when": {
+                  "type": "object"
+                },
+                "result": {
+                  "enum": [
+                    "ALLOW",
+                    "REQUIRE_APPROVAL",
+                    "DENY",
+                    "HOLD"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "success_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entity": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "principal": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/entity"
+        },
+        {
+          "required": [
+            "status",
+            "permissions"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "active",
+                "suspended"
+              ]
+            },
+            "permissions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "target"
+                ],
+                "properties": {
+                  "action": {
+                    "$ref": "#/$defs/id"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/id"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dependency": {
+      "type": "object",
+      "required": [
+        "source",
+        "target",
+        "type"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/id"
+        },
+        "target": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "permission_check": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "action",
+        "target_id"
+      ],
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/id"
+        },
+        "action": {
+          "enum": [
+            "vm.start",
+            "vm.stop",
+            "vm.snapshot",
+            "inventory.list",
+            "asset.inspect"
+          ]
+        },
+        "target_id": {
+          "$ref": "#/$defs/id"
+        },
+        "mutate": {
+          "type": "boolean"
+        }
+      }
+    },
+    "transitions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    }
+  }
+}

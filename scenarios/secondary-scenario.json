@@ -1,0 +1,526 @@
+{
+  "id": "secondary-scenario",
+  "name": "Maintenance review",
+  "title": "Maintenance review",
+  "description": "Review a fictional maintenance action and compare a VM snapshot, service interruption, and scoped session closure.",
+  "initial_state": "CREATED",
+  "tenants": [
+    {
+      "id": "tenant-a",
+      "name": "Harbor Commerce"
+    },
+    {
+      "id": "tenant-b",
+      "name": "Northwind Health"
+    }
+  ],
+  "assets": [
+    {
+      "id": "vm-a",
+      "name": "Harbor reporting VM",
+      "tenant_id": "tenant-a",
+      "type": "vm",
+      "criticality": "normal",
+      "shared": false,
+      "state": "running"
+    },
+    {
+      "id": "host-a",
+      "name": "Shared maintenance host",
+      "tenant_id": "tenant-a",
+      "type": "host",
+      "criticality": "critical",
+      "shared": true,
+      "state": "running"
+    },
+    {
+      "id": "service-b",
+      "name": "Northwind booking endpoint",
+      "tenant_id": "tenant-b",
+      "type": "service",
+      "criticality": "critical",
+      "shared": true,
+      "state": "running"
+    }
+  ],
+  "identities": [
+    {
+      "id": "identity-a",
+      "name": "Harbor operator",
+      "tenant_id": "tenant-a",
+      "status": "active",
+      "permissions": [
+        {
+          "action": "vm.stop",
+          "target": "vm-a"
+        },
+        {
+          "action": "vm.snapshot",
+          "target": "vm-a"
+        }
+      ],
+      "type": "human",
+      "roles": [
+        "tenant_operator"
+      ]
+    },
+    {
+      "id": "incident-owner",
+      "name": "Incident owner",
+      "tenant_id": "tenant-a",
+      "type": "human",
+      "roles": [
+        "incident_owner"
+      ],
+      "status": "active",
+      "permissions": []
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session-a",
+      "name": "Harbor operator console",
+      "identity_id": "identity-a",
+      "status": "active",
+      "permissions": [
+        {
+          "action": "vm.stop",
+          "target": "vm-a"
+        },
+        {
+          "action": "vm.snapshot",
+          "target": "vm-a"
+        }
+      ],
+      "tenant_id": "tenant-a",
+      "valid_for_seconds": 3600
+    }
+  ],
+  "dependencies": [
+    {
+      "source": "vm-a",
+      "target": "host-a",
+      "type": "runs_on"
+    },
+    {
+      "source": "service-b",
+      "target": "host-a",
+      "type": "depends_on"
+    }
+  ],
+  "change": {
+    "source": "service-b",
+    "target": "vm-a",
+    "type": "depends_on"
+  },
+  "events": [
+    {
+      "id": "observation-001",
+      "event_type": "observation_started",
+      "actor_id": "synthetic-monitor",
+      "target_id": "tenant-a",
+      "outcome": "observed",
+      "payload": {
+        "detail": "Synthetic incident replay started."
+      }
+    },
+    {
+      "id": "evidence-001",
+      "event_type": "alert_observed",
+      "actor_id": "synthetic-monitor",
+      "target_id": "vm-a",
+      "outcome": "observed",
+      "payload": {
+        "detail": "The simulator flagged an overdue maintenance window."
+      }
+    },
+    {
+      "id": "evidence-002",
+      "event_type": "evidence_observed",
+      "actor_id": "synthetic-inventory",
+      "target_id": "vm-a",
+      "outcome": "observed",
+      "payload": {
+        "detail": "The fixture records an authorized snapshot on the incident VM and identifies dependencies."
+      },
+      "permission_check": {
+        "session_id": "session-a",
+        "action": "vm.snapshot",
+        "target_id": "vm-a",
+        "mutate": true
+      }
+    },
+    {
+      "id": "evidence-003",
+      "event_type": "permission_observed",
+      "actor_id": "session-a",
+      "target_id": "vm-a",
+      "outcome": "observed",
+      "payload": {
+        "detail": "The fixture checks an operation absent from the session grants."
+      },
+      "permission_check": {
+        "session_id": "session-a",
+        "action": "vm.start",
+        "target_id": "vm-a"
+      }
+    }
+  ],
+  "proposals": [
+    {
+      "id": "snapshot-vm",
+      "action_type": "vm.snapshot",
+      "target_id": "vm-a",
+      "parameters": {},
+      "rationale": "Preserve a simulator snapshot before making changes.",
+      "expected_effect": "Records one snapshot for the reporting VM.",
+      "assumptions": [
+        "All resources are synthetic fixture records."
+      ],
+      "evidence_refs": [
+        "evidence-001"
+      ],
+      "phase": "initial"
+    },
+    {
+      "id": "stop-vm",
+      "action_type": "vm.stop",
+      "target_id": "vm-a",
+      "parameters": {},
+      "rationale": "Evaluate stopping the VM for maintenance.",
+      "expected_effect": "The simulated VM stops only after approval.",
+      "assumptions": [
+        "All resources are synthetic fixture records."
+      ],
+      "evidence_refs": [
+        "evidence-002"
+      ],
+      "phase": "initial"
+    },
+    {
+      "id": "suspend-session",
+      "action_type": "session.suspend",
+      "target_id": "session-a",
+      "parameters": {},
+      "rationale": "End the maintenance console session when review is complete.",
+      "expected_effect": "The maintenance console session loses its simulated VM access.",
+      "assumptions": [
+        "All resources are synthetic fixture records."
+      ],
+      "evidence_refs": [
+        "evidence-001"
+      ],
+      "phase": "alternative"
+    }
+  ],
+  "policies": [
+    {
+      "id": "synthetic-response-policy",
+      "version": "1",
+      "rules": [
+        {
+          "priority": 100,
+          "when": {
+            "eq": [
+              "shared",
+              true
+            ]
+          },
+          "result": "DENY",
+          "reason": "DENY_SHARED_RESOURCE"
+        },
+        {
+          "priority": 90,
+          "when": {
+            "eq": [
+              "critical_shared",
+              true
+            ]
+          },
+          "result": "DENY",
+          "reason": "DENY_CRITICAL_SHARED_DEPENDENCY"
+        },
+        {
+          "priority": 80,
+          "when": {
+            "eq": [
+              "cross_tenant",
+              true
+            ]
+          },
+          "result": "DENY",
+          "reason": "DENY_CROSS_TENANT"
+        },
+        {
+          "priority": 75,
+          "when": {
+            "eq": [
+              "destructive",
+              true
+            ]
+          },
+          "result": "DENY",
+          "reason": "DENY_DESTRUCTIVE_ACTION"
+        },
+        {
+          "priority": 70,
+          "when": {
+            "eq": [
+              "unknown",
+              true
+            ]
+          },
+          "result": "DENY",
+          "reason": "DENY_UNKNOWN_ACTION"
+        },
+        {
+          "priority": 60,
+          "when": {
+            "eq": [
+              "evidence_ok",
+              false
+            ]
+          },
+          "result": "HOLD",
+          "reason": "HOLD_EVIDENCE"
+        },
+        {
+          "priority": 50,
+          "when": {
+            "eq": [
+              "sensitive",
+              true
+            ]
+          },
+          "result": "REQUIRE_APPROVAL",
+          "reason": "REQUIRE_APPROVAL_SENSITIVE"
+        },
+        {
+          "priority": 40,
+          "when": {
+            "eq": [
+              "limited",
+              true
+            ]
+          },
+          "result": "ALLOW",
+          "reason": "ALLOW_LIMITED_RESPONSE"
+        },
+        {
+          "priority": 0,
+          "when": {
+            "eq": [
+              "unknown",
+              false
+            ]
+          },
+          "result": "DENY",
+          "reason": "DENY_DEFAULT"
+        }
+      ]
+    }
+  ],
+  "transitions": {
+    "INVESTIGATING": {
+      "planning": "PLANNING",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE"
+    },
+    "PLANNING": {
+      "evaluating": "EVALUATING",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE"
+    },
+    "EVALUATING": {
+      "waiting_approval": "WAITING_APPROVAL",
+      "authorized": "AUTHORIZED",
+      "denied": "DENIED",
+      "planning": "PLANNING",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE"
+    },
+    "WAITING_APPROVAL": {
+      "authorized": "AUTHORIZED",
+      "denied": "DENIED",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE",
+      "evaluating": "EVALUATING"
+    },
+    "AUTHORIZED": {
+      "executing": "EXECUTING",
+      "evaluating": "EVALUATING",
+      "denied": "DENIED",
+      "planning": "PLANNING",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE"
+    },
+    "DENIED": {
+      "planning": "PLANNING",
+      "evaluating": "EVALUATING",
+      "investigating": "INVESTIGATING",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE"
+    },
+    "EXECUTING": {
+      "verifying": "VERIFYING",
+      "denied": "DENIED",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE"
+    },
+    "VERIFYING": {
+      "contained": "CONTAINED",
+      "failed": "FAILED",
+      "indeterminate": "INDETERMINATE"
+    },
+    "CONTAINED": {
+      "planning": "PLANNING",
+      "investigating": "INVESTIGATING",
+      "evaluating": "EVALUATING"
+    },
+    "FAILED": {
+      "planning": "PLANNING",
+      "investigating": "INVESTIGATING",
+      "evaluating": "EVALUATING"
+    },
+    "INDETERMINATE": {
+      "planning": "PLANNING",
+      "investigating": "INVESTIGATING",
+      "evaluating": "EVALUATING"
+    },
+    "CREATED": {
+      "observation_started": "OBSERVING",
+      "observing": "OBSERVING"
+    },
+    "OBSERVING": {
+      "alert_observed": "DETECTED",
+      "detected": "DETECTED"
+    },
+    "DETECTED": {
+      "evidence_observed": "INVESTIGATING",
+      "investigating": "INVESTIGATING"
+    }
+  },
+  "actors": [
+    {
+      "id": "incident-owner",
+      "name": "Incident owner",
+      "role": "incident_owner"
+    }
+  ],
+  "probe": {
+    "session_id": "session-a",
+    "action": "vm.stop",
+    "target_id": "vm-a"
+  },
+  "alternative_proposal_id": "suspend-session",
+  "schema_version": 1,
+  "incident": {
+    "id": "synthetic-maintenance-incident",
+    "tenant_id": "tenant-a"
+  },
+  "processes": [
+    {
+      "id": "incident-response",
+      "initial_state": "CREATED",
+      "transitions": {
+        "INVESTIGATING": {
+          "planning": "PLANNING",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE"
+        },
+        "PLANNING": {
+          "evaluating": "EVALUATING",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE"
+        },
+        "EVALUATING": {
+          "waiting_approval": "WAITING_APPROVAL",
+          "authorized": "AUTHORIZED",
+          "denied": "DENIED",
+          "planning": "PLANNING",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE"
+        },
+        "WAITING_APPROVAL": {
+          "authorized": "AUTHORIZED",
+          "denied": "DENIED",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE",
+          "evaluating": "EVALUATING"
+        },
+        "AUTHORIZED": {
+          "executing": "EXECUTING",
+          "evaluating": "EVALUATING",
+          "denied": "DENIED",
+          "planning": "PLANNING",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE"
+        },
+        "DENIED": {
+          "planning": "PLANNING",
+          "evaluating": "EVALUATING",
+          "investigating": "INVESTIGATING",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE"
+        },
+        "EXECUTING": {
+          "verifying": "VERIFYING",
+          "denied": "DENIED",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE"
+        },
+        "VERIFYING": {
+          "contained": "CONTAINED",
+          "failed": "FAILED",
+          "indeterminate": "INDETERMINATE"
+        },
+        "CONTAINED": {
+          "planning": "PLANNING",
+          "investigating": "INVESTIGATING",
+          "evaluating": "EVALUATING"
+        },
+        "FAILED": {
+          "planning": "PLANNING",
+          "investigating": "INVESTIGATING",
+          "evaluating": "EVALUATING"
+        },
+        "INDETERMINATE": {
+          "planning": "PLANNING",
+          "investigating": "INVESTIGATING",
+          "evaluating": "EVALUATING"
+        },
+        "CREATED": {
+          "observation_started": "OBSERVING",
+          "observing": "OBSERVING"
+        },
+        "OBSERVING": {
+          "alert_observed": "DETECTED",
+          "detected": "DETECTED"
+        },
+        "DETECTED": {
+          "evidence_observed": "INVESTIGATING",
+          "investigating": "INVESTIGATING"
+        }
+      }
+    }
+  ],
+  "roles": [
+    {
+      "id": "incident_owner",
+      "name": "Incident owner"
+    },
+    {
+      "id": "tenant_operator",
+      "name": "Tenant operator"
+    }
+  ],
+  "metadata": {
+    "environment": "synthetic simulator",
+    "language": "en",
+    "category": "incident response"
+  },
+  "success_criteria": [
+    "Require an active incident owner to approve sensitive maintenance actions.",
+    "Verify simulator state independently after an approved action."
+  ]
+}

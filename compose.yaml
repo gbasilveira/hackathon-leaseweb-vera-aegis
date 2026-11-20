@@ -1,0 +1,17 @@
+services:
+  aegis:
+    build:
+      context: .
+      args:
+        WITH_CLAUDE: ${WITH_CLAUDE:-0}
+    environment:
+      AEGIS_PORT: ${AEGIS_PORT:-8765}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "127.0.0.1:${AEGIS_PORT:-8765}:${AEGIS_PORT:-8765}"
+    volumes:
+      - aegis-state:/data
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  aegis-state:
