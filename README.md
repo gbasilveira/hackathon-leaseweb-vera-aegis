@@ -70,6 +70,7 @@ it.
 
 ## Documentation
 
+- [How it works, end to end](docs/HOW_IT_WORKS.md)
 - [Live architecture decisions](docs/ADR-001-live-architecture.md) and [architecture with generated topology](docs/README_ARCHITECTURE.md)
 - [Deployment](docs/DEPLOYMENT.md) and [tests](docs/TESTING.md)
 - [Scenario configuration](docs/SCENARIO_SCHEMA.md) and [attack narrative](docs/ATTACK_CHAIN.md)
