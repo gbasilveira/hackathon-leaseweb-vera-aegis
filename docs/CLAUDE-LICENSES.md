@@ -8,7 +8,7 @@ service except where a component has its own license.
 
 The following inventory records licenses declared by the wheels resolved on
 Linux x86-64, Python 3.14, with `claude-agent-sdk==0.2.185`. Other platforms and
-future installs may resolve different transitive versions. Installed package
+different Python versions may require an updated lock. Installed package
 metadata and license files cover the exact distributions present.
 
 | Declared license | Packages |

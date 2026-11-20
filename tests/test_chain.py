@@ -192,3 +192,28 @@ class Chain(unittest.TestCase):
         self.assertEqual(
             self.gov.evaluate(self.propose())["reason_codes"], ["DENY_DEFAULT"]
         )
+
+    def test_drift_prevents_first_suspension(self):
+        cap = self.cap()
+        before = self.core.snapshot()
+        self.core.change()
+        self.assertEqual(self.gov.execute(cap)["result"], "HOLD_CONTEXT_CHANGED")
+        after = self.core.snapshot()
+        for key in ("assets", "sessions", "identities"):
+            self.assertEqual(before[key], after[key])
+        manifest = self.gov.manifest()
+        self.assertEqual(manifest["executions"], [])
+        self.assertEqual(manifest["capabilities"][-1]["status"], "revoked")
+        self.assertEqual(manifest["decisions"][-1]["result"], "DENY")
+
+    def test_later_fixture_attempts_observe_containment(self):
+        self.core.load("control-plane-compromise")
+        while not set(self.fixture["evidence_refs"]) <= {e["id"] for e in self.core.snapshot()["events"]}:
+            self.assertIsNotNone(self.core.step())
+        self.assertEqual(self.gov.execute(self.cap())["result"], "VERIFIED")
+        attempts = []
+        while (event := self.core.step()) is not None:
+            if "permission_check" in event["payload"]:
+                attempts.append(event["outcome"])
+        self.assertTrue(attempts)
+        self.assertEqual(set(attempts), {"denied"})

@@ -7,11 +7,27 @@
   "tenants": [
     {
       "id": "tenant-a",
-      "name": "Harbor Commerce"
+      "name": "Harbor Commerce",
+      "description": "Synthetic cloud tenant for Harbor Commerce.",
+      "contact_role": "tenant_operator",
+      "criticality": "standard",
+      "owner": "tenant_operator",
+      "policies": [
+        "synthetic-response-policy"
+      ],
+      "metadata": {}
     },
     {
       "id": "tenant-b",
-      "name": "Northwind Health"
+      "name": "Northwind Health",
+      "description": "Synthetic cloud tenant for Northwind Health.",
+      "contact_role": "tenant_operator",
+      "criticality": "standard",
+      "owner": "tenant_operator",
+      "policies": [
+        "synthetic-response-policy"
+      ],
+      "metadata": {}
     }
   ],
   "assets": [
@@ -19,19 +35,21 @@
       "id": "vm-a",
       "name": "Harbor reporting VM",
       "tenant_id": "tenant-a",
-      "type": "vm",
+      "type": "virtual_machine",
       "criticality": "normal",
       "shared": false,
-      "state": "running"
+      "state": "running",
+      "metadata": {}
     },
     {
       "id": "host-a",
       "name": "Shared maintenance host",
       "tenant_id": "tenant-a",
-      "type": "host",
+      "type": "hypervisor_host",
       "criticality": "critical",
       "shared": true,
-      "state": "running"
+      "state": "running",
+      "metadata": {}
     },
     {
       "id": "service-b",
@@ -40,7 +58,8 @@
       "type": "service",
       "criticality": "critical",
       "shared": true,
-      "state": "running"
+      "state": "running",
+      "metadata": {}
     }
   ],
   "identities": [
@@ -62,7 +81,8 @@
       "type": "human",
       "roles": [
         "tenant_operator"
-      ]
+      ],
+      "metadata": {}
     },
     {
       "id": "incident-owner",
@@ -73,7 +93,8 @@
         "incident_owner"
       ],
       "status": "active",
-      "permissions": []
+      "permissions": [],
+      "metadata": {}
     }
   ],
   "sessions": [
@@ -93,25 +114,35 @@
         }
       ],
       "tenant_id": "tenant-a",
-      "valid_for_seconds": 3600
+      "valid_for_seconds": 3600,
+      "metadata": {}
     }
   ],
   "dependencies": [
     {
       "source": "vm-a",
       "target": "host-a",
-      "type": "runs_on"
+      "type": "runs_on",
+      "relation": "runs_on",
+      "criticality": "standard",
+      "metadata": {}
     },
     {
       "source": "service-b",
       "target": "host-a",
-      "type": "depends_on"
+      "type": "depends_on",
+      "relation": "depends_on",
+      "criticality": "standard",
+      "metadata": {}
     }
   ],
   "change": {
     "source": "service-b",
     "target": "vm-a",
-    "type": "depends_on"
+    "type": "depends_on",
+    "relation": "depends_on",
+    "criticality": "standard",
+    "metadata": {}
   },
   "events": [
     {
@@ -293,7 +324,8 @@
             ]
           },
           "result": "REQUIRE_APPROVAL",
-          "reason": "REQUIRE_APPROVAL_SENSITIVE"
+          "reason": "REQUIRE_APPROVAL_SENSITIVE",
+          "approver_role": "incident_owner"
         },
         {
           "priority": 40,
@@ -416,7 +448,20 @@
   "schema_version": 1,
   "incident": {
     "id": "synthetic-maintenance-incident",
-    "tenant_id": "tenant-a"
+    "tenant_id": "tenant-a",
+    "classification": {
+      "default": "unclassified",
+      "rules": [
+        {
+          "event_id": "evidence-001",
+          "severity": "low"
+        },
+        {
+          "event_id": "evidence-002",
+          "severity": "medium"
+        }
+      ]
+    }
   },
   "processes": [
     {
@@ -507,20 +552,113 @@
   "roles": [
     {
       "id": "incident_owner",
-      "name": "Incident owner"
+      "name": "Incident owner",
+      "authority": "human",
+      "permissions": [
+        "proposal.approve",
+        "proposal.reject"
+      ]
     },
     {
       "id": "tenant_operator",
-      "name": "Tenant operator"
+      "name": "Tenant operator",
+      "authority": "human",
+      "permissions": [
+        "inventory.operate"
+      ]
     }
   ],
   "metadata": {
     "environment": "synthetic simulator",
     "language": "en",
-    "category": "incident response"
+    "category": "incident response",
+    "domain": {
+      "name": "Synthetic cloud control plane",
+      "resource_kinds": [
+        "tenant",
+        "physical_host",
+        "virtual_machine",
+        "service",
+        "network",
+        "management_plane",
+        "identity",
+        "session"
+      ],
+      "dependency_direction": "source depends on target",
+      "version": 1
+    }
   },
   "success_criteria": [
     "Require an active incident owner to approve sensitive maintenance actions.",
     "Verify simulator state independently after an approved action."
-  ]
+  ],
+  "agent_roles": [
+    {
+      "id": "observer",
+      "name": "Observer",
+      "authority": "advisory",
+      "permissions": [
+        "incident.observe"
+      ]
+    },
+    {
+      "id": "investigator",
+      "name": "Investigator",
+      "authority": "advisory",
+      "permissions": [
+        "incident.read",
+        "inventory.read",
+        "impact.simulate"
+      ]
+    },
+    {
+      "id": "response_planner",
+      "name": "Response planner",
+      "authority": "advisory",
+      "permissions": [
+        "proposal.submit"
+      ]
+    },
+    {
+      "id": "outcome_verifier",
+      "name": "Outcome verifier",
+      "authority": "deterministic",
+      "permissions": [
+        "inventory.read",
+        "permissions.verify"
+      ]
+    },
+    {
+      "id": "detector",
+      "name": "Detector",
+      "authority": "advisory",
+      "permissions": [
+        "incident.classify"
+      ]
+    },
+    {
+      "id": "containment_executor",
+      "name": "Containment executor",
+      "authority": "deterministic",
+      "permissions": [
+        "capability.execute"
+      ]
+    },
+    {
+      "id": "governance_engine",
+      "name": "Governance engine",
+      "authority": "deterministic",
+      "permissions": [
+        "policy.evaluate",
+        "capability.issue",
+        "capability.revoke"
+      ]
+    }
+  ],
+  "scenario": {
+    "id": "secondary-scenario",
+    "name": "Maintenance review",
+    "description": "Review a fictional maintenance action and compare a VM snapshot, service interruption, and scoped session closure."
+  },
+  "process_id": "incident-response"
 }

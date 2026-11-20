@@ -5,14 +5,13 @@ import ipaddress
 import json
 import logging
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .agent import investigate
 from .core import Core, SCENARIOS
-from .governance import Governance
+from .governance import Governance, digest
 
 LOG = logging.getLogger(__name__)
 API_PREFIX = "/api/v1/"
@@ -57,6 +56,10 @@ class Workspace:
         self.core = Core(self.path)
         self.governance = Governance(self.core)
         self.job = None
+        self.speed = 1
+        self.closed = threading.Event()
+        self.worker = None
+        self.investigation_task = None
         existing = self.core.snapshot()["scenario"]
         if existing:
             self.scenario_id = existing["id"]
@@ -78,60 +81,92 @@ class Workspace:
             capability.pop("nonce", None)
         snapshot = self.core.snapshot()
         snapshot["events"] = manifest["events"]
-        self.current = {"snapshot": snapshot, "manifest": manifest}
+        self.current = {"snapshot": snapshot, "manifest": manifest, "policy_digest": digest(manifest["policies"])}
 
     def status(self):
         with self.lock:
             if self.job and self.job["kind"] == "investigate" and self.job["state"] == "running":
                 self._capture()
-            return {**self.current, "job": dict(self.job) if self.job else None}
+            return {**self.current, "speed": self.speed, "job": dict(self.job) if self.job else None}
 
     def _start(self, operation, mode=None, alternative=False):
         self.job = {"kind": operation, "state": "running"}
         if mode:
             self.job["mode"] = mode
-        threading.Thread(
+        self.worker = threading.Thread(
             target=self._run,
             args=(self.job, self.core, self.governance, mode, alternative),
             daemon=True,
-        ).start()
+        )
+        self.worker.start()
+
+    async def _investigate(self, core, governance, mode, alternative):
+        with self.lock:
+            if self.closed.is_set():
+                return
+            self.investigation_task = (asyncio.get_running_loop(), asyncio.current_task())
+        try:
+            return await investigate(core, governance, mode, alternative=alternative)
+        finally:
+            with self.lock:
+                self.investigation_task = None
 
     def _run(self, job, core, governance, mode, alternative):
         try:
             if job["kind"] == "investigate":
-                result = asyncio.run(investigate(core, governance, mode, alternative=alternative))
+                result = asyncio.run(self._investigate(core, governance, mode, alternative))
             else:
                 result = self._replay(job, core)
             with self.lock:
-                if self.job is job and job["state"] == "running":
+                if self.job is job and job["state"] == "running" and not self.closed.is_set():
                     self._capture()
                     job.update(state="complete", result=result)
+        except asyncio.CancelledError:
+            return
         except Exception as error:
             LOG.warning("%s job failed (%s)", job["kind"], type(error).__name__)
             with self.lock:
-                if self.job is job and job["state"] == "running":
+                if self.job is job and job["state"] == "running" and not self.closed.is_set():
                     self._capture()
                     job.update(state="failed", error=f"The {job['kind']} job failed.")
 
     def _replay(self, job, core):
-        while True:
+        while not self.closed.is_set():
             with self.lock:
-                if self.job is not job or job["state"] != "running":
+                if self.closed.is_set() or self.job is not job or job["state"] != "running":
                     return
                 event = core.step()
                 self._capture()
                 if event is None:
                     return
-            time.sleep(0.45)
+                delay = 0.3 / self.speed
+            self.closed.wait(delay)
+
+    def close(self):
+        with self.lock:
+            self.closed.set()
+            if self.investigation_task:
+                loop, task = self.investigation_task
+                loop.call_soon_threadsafe(task.cancel)
+        if self.worker:
+            self.worker.join(timeout=2)
 
     def action(self, action, data):
         with self.lock:
+            if self.closed.is_set():
+                raise RequestError("Server is shutting down", 503)
             running = self.job and self.job["state"] == "running"
             if action in {"load", "reset"}:
                 if running and self.job["kind"] == "investigate":
                     raise RequestError("Wait for the investigation to finish before resetting", 409)
                 scenario_id = required_string(data, "scenario_id") if action == "load" else self.scenario_id
                 self._load(scenario_id)
+                return self.status()
+            if action == "speed":
+                speed = data.get("speed")
+                if type(speed) not in (int, float) or speed not in (0.5, 1, 2, 4):
+                    raise RequestError("Speed must be 0.5, 1, 2, or 4")
+                self.speed = speed
                 return self.status()
             if action == "pause":
                 if not running or self.job["kind"] != "replay":
@@ -268,6 +303,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class LocalHTTPServer(ThreadingHTTPServer):
+    def server_close(self):
+        if hasattr(self, "workspace"):
+            self.workspace.close()
+        super().server_close()
+
+
 def make_server(path, host="127.0.0.1", port=8765):
     if host == "localhost":
         host = "127.0.0.1"
@@ -275,7 +317,7 @@ def make_server(path, host="127.0.0.1", port=8765):
     if address.version != 4 or not (address.is_loopback or address.is_unspecified):
         raise ValueError("Use an IPv4 loopback address or 0.0.0.0 for a container")
     workspace = Workspace(path)
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = LocalHTTPServer((host, port), Handler)
     _, actual_port = server.server_address
     names = {"localhost", str(address) if address.is_loopback else "127.0.0.1"}
     server.allowed_hosts = {f"{name}:{actual_port}" for name in names}

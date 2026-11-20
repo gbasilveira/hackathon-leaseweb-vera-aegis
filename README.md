@@ -4,9 +4,11 @@
 
 ## Run locally
 
-From the cloned repository on Linux with Python 3.11 or later:
+On Linux with Python 3.11 or later:
 
 ```sh
+git clone https://github.com/gbasilveira/hackathon-leaseweb-vera-aegis.git
+cd hackathon-leaseweb-vera-aegis
 ./scripts/diagnose.sh
 ./scripts/test.sh
 ./scripts/dev.sh

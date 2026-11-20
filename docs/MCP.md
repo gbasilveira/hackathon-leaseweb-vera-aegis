@@ -14,8 +14,7 @@ python -m pip install -r requirements-claude.txt
 ```
 
 The default model is the Anthropic `sonnet` alias. Set `AEGIS_CLAUDE_MODEL` to choose
-another Claude model. Each run has an SDK budget of US$1 and accepts the following
-operator limits.
+another Claude model. Each run accepts the following operator limits.
 
 | Environment variable | Default | Supported range |
 | --- | ---: | ---: |
@@ -23,6 +22,7 @@ operator limits.
 | `AEGIS_CLAUDE_MAX_TOKENS` | 30,000 | 20,000–50,000 |
 | `AEGIS_CLAUDE_MAX_TOOL_CALLS` | 30 | 1–50 |
 | `AEGIS_CLAUDE_TIMEOUT_SECONDS` | 180 | 1–300 |
+| `AEGIS_CLAUDE_MAX_BUDGET_USD` | 1.00 | 0.05–5.00 |
 
 A failed or unavailable Claude run is reported in its selected mode. Proposals
 already submitted during a run remain queued for review even if the run ends
@@ -33,9 +33,11 @@ directory, an empty built-in tool preset, disabled filesystem settings and
 session persistence, a strict MCP configuration, exact tool names, and a
 deny-by-default permission hook. The CLI environment clears unrelated inherited
 values. The application sends synthetic evidence and context returned by tools
-to Anthropic in live mode. Tool names and outcomes are recorded in the
-incident's journal. Approval, capability issuance, execution and outcome
-verification remain application-side operations.
+to Anthropic in live mode. The incident journal records tool names, outcomes,
+and bounded summaries of observed responses. Claude receives at most 24 KB
+per tool response. Untrusted fixture logs carry provenance and trust labels.
+Approval, capability issuance, execution and outcome verification remain
+application-side operations.
 
 From the repository root, this smoke check uses the bundled
 `control-plane-compromise` fixture in a temporary database and confirms that
@@ -57,8 +59,24 @@ python -m scripts.smoke_claude
 | `get_previous_decisions` | Proposal and decision summaries |
 | `submit_response_proposal` | Queues a proposal for governance review |
 
-An operator can set `AEGIS_EXTERNAL_MCP_CONFIG` to a JSON array of trusted MCP
-servers. Each server declares exact names for its read-only tools in
+The read tools are the incident resource access paths. These conceptual URIs
+describe the records each reader retrieves from the current incident.
+
+| Conceptual resource URI | MCP reader |
+| --- | --- |
+| `aegis://incident/scenario` | `get_applicable_policies` returns scenario and incident metadata |
+| `aegis://incident/timeline` | `get_incident_events` |
+| `aegis://incident/identities` | `get_identity_context` |
+| `aegis://incident/graph` | `get_asset_graph` returns the asset graph and context revision |
+| `aegis://incident/dependencies` | `get_asset_dependencies` |
+| `aegis://incident/policies` | `get_applicable_policies` |
+| `aegis://incident/sessions` | `get_existing_sessions` |
+| `aegis://incident/decisions` | `get_previous_decisions` |
+
+An operator can set `AEGIS_EXTERNAL_MCP_CONFIG` to an inline JSON array of
+trusted MCP servers or set `AEGIS_EXTERNAL_MCP_CONFIG_FILE` to a readable UTF-8
+file containing the same JSON. Use one setting. Each server declares exact names
+for its read-only tools in
 `read_tools`. AEGIS restricts invocation to those names and records their
 outcomes. External integrations are off by default and are unused by offline
 replay.

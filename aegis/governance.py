@@ -178,6 +178,7 @@ class Governance:
             ),
         )
         result, reason, policy, version = "DENY", "DENY_DEFAULT", "baseline", "1"
+        required_role = "incident_owner"
         try:
             rules = sorted(
                 ((r, pol) for pol in policies for r in pol["rules"]),
@@ -186,6 +187,7 @@ class Governance:
             )
             for rule, pol in rules:
                 if matches(rule["when"], facts):
+                    required_role = rule.get("approver_role", "incident_owner")
                     result, reason, policy, version = (
                         rule["result"],
                         rule["reason"],
@@ -222,6 +224,7 @@ class Governance:
             reason_codes=[reason],
             policy_id=policy,
             policy_version=version,
+            required_role=required_role,
             policy_digest=digest(policies),
             context_revision=s["revision"],
             context_digest=context,
@@ -279,16 +282,16 @@ class Governance:
         with self.core.tx() as c:
             p = self.find(c, "proposals", ident)
             s = self.core.snapshot(c)
+            d = self.assess(c, p)
             human = next((x for x in s["identities"] if x["id"] == actor), {})
             if (
                 actor == p["proposed_by"]
                 or human.get("type") != "human"
                 or human.get("status") != "active"
                 or human.get("tenant_id") != p["tenant_id"]
-                or "incident_owner" not in human.get("roles", [])
+                or d["required_role"] not in human.get("roles", [])
             ):
                 raise ValueError("Unauthorized approver")
-            d = self.assess(c, p)
             last = next(
                 (
                     x
@@ -312,7 +315,7 @@ class Governance:
                     proposal_id=ident,
                     request_hash=digest(p),
                     approver_id=actor,
-                    approver_role="incident_owner",
+                    approver_role=d["required_role"],
                     decision="approve" if accept else "reject",
                     created_at=time.time(),
                     expires_at=time.time() + 300,

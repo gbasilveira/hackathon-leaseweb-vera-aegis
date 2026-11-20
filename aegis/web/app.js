@@ -5,7 +5,9 @@ const label = (value) => String(value ?? "—").replaceAll("_", " ");
 const last = (rows, id) => rows.filter((row) => row.proposal_id === id).at(-1);
 const state = { current: null, graphKey: "", pending: false, notice: "", error: false };
 let cy;
-let renderEventsKey = "";
+const renderEventsKeys = new Map();
+let processKey = "";
+let policyKey = "";
 let commandGeneration = 0;
 
 function node(tag, text, className) {
@@ -27,15 +29,48 @@ async function api(path, body) {
   return value;
 }
 
+function inspectResource(resource) {
+  const details = byId("graph-selection");
+  details.replaceChildren();
+  details.hidden = !resource;
+  if (!resource) return;
+  const name = node("strong", resource.label);
+  details.append(name, document.createTextNode(" · " +
+    [resource.id, resource.tenant_id, resource.criticality, resource.currentState].filter(Boolean).join(" · ")));
+  if (Array.isArray(resource.permissions)) {
+    const permissions = node("ul");
+    if (!resource.permissions.length) permissions.append(node("li", "No permissions."));
+    for (const { action, target } of resource.permissions) permissions.append(node("li", `${action} · ${target}`));
+    details.append(permissions);
+  }
+}
+
+function highlightLatestEvent(snapshot) {
+  const latest = snapshot.events.filter((event) => event.payload?.fixture_id).at(-1);
+  cy.nodes().removeClass("recent-event");
+  if (!latest) return;
+  for (const id of [latest.actor_id, latest.target_id, latest.payload?.permission_check?.session_id]) {
+    if (id) cy.getElementById(id).addClass("recent-event");
+  }
+}
+
 function graph(snapshot) {
+  const showTenants = byId("show-tenants").checked;
   const principals = [...snapshot.identities, ...snapshot.sessions];
-  const key = JSON.stringify([snapshot.incident_id, snapshot.assets, principals, snapshot.dependencies]);
-  if (key === state.graphKey) return;
+  const key = JSON.stringify([snapshot.incident_id, snapshot.assets, principals, snapshot.dependencies, showTenants]);
+  if (key === state.graphKey) {
+    highlightLatestEvent(snapshot);
+    return;
+  }
   state.graphKey = key;
-  byId("graph-selection").textContent = "Select a resource to inspect it.";
+  const selector = byId("resource");
+  const selected = selector.value;
+  selector.replaceChildren(node("option", "Inspect a resource"));
+  selector.firstElementChild.value = "";
   const baseline = new Map([...snapshot.scenario.assets, ...snapshot.scenario.identities, ...snapshot.scenario.sessions]
     .map((item) => [item.id, item.state ?? item.status]));
-  const elements = [...snapshot.assets, ...principals].map((item) => {
+  const resources = [...snapshot.assets, ...principals];
+  const elements = resources.map((item) => {
     const currentState = item.state ?? item.status;
     return {
       data: { ...item, label: item.name || item.id, currentState },
@@ -43,6 +78,23 @@ function graph(snapshot) {
         currentState !== baseline.get(item.id) ? "changed" : ""].join(" "),
     };
   });
+  if (showTenants) {
+    for (const tenant of snapshot.tenants) {
+      elements.push({ data: { ...tenant, label: tenant.name || tenant.id }, classes: "tenant" });
+    }
+    for (const item of resources) {
+      if (!item.tenant_id) continue;
+      elements.push({
+        data: { id: "owner-link-" + item.id, source: item.id, target: item.tenant_id, type: "owned_by" },
+        classes: "owner-link",
+      });
+    }
+  }
+  for (const item of elements) {
+    const option = node("option", item.data.label);
+    option.value = item.data.id;
+    selector.append(option);
+  }
   for (const session of snapshot.sessions) {
     elements.push({
       data: { id: "session-link-" + session.id, source: session.id, target: session.identity_id, type: "uses_identity" },
@@ -60,44 +112,60 @@ function graph(snapshot) {
   cy = cytoscape({
     container: byId("graph"),
     elements,
-    layout: { name: "breadthfirst", directed: true, padding: 34, spacingFactor: 1.5 },
-    minZoom: 0.35,
+    layout: { name: "breadthfirst", directed: true, padding: 34, spacingFactor: 1.12 },
+    minZoom: 0.24,
     maxZoom: 2,
     style: [
       { selector: "node", style: {
-        label: "data(label)", color: "#eaf0f7", "font-size": 12, "font-weight": 600,
+        label: "data(label)", color: "#eaf0f7", "font-size": 17, "font-weight": 600,
         "background-color": "#355e7d", "border-color": "#789abd", "border-width": 2,
-        shape: "round-rectangle", width: 190, height: 50, "text-halign": "center",
-        "text-valign": "center", "text-wrap": "wrap", "text-max-width": 166,
+        shape: "round-rectangle", width: 174, height: 55, "text-halign": "center",
+        "text-valign": "center", "text-wrap": "wrap", "text-max-width": 150,
       } },
       { selector: "node.shared", style: { "background-color": "#24554e", "border-color": "#70d9bb" } },
       { selector: "node.identity", style: { "background-color": "#4c3d73", "border-color": "#ae9be4" } },
       { selector: "node.changed", style: { "background-color": "#5a4433", "border-color": "#f2c080" } },
+      { selector: "node.tenant", style: { shape: "ellipse", "background-color": "#414a66", "border-color": "#a9b7df" } },
+      { selector: "node.recent-event", style: { "border-color": "#eeaba2", "border-width": 4 } },
       { selector: "node:selected", style: { "border-width": 4 } },
       { selector: "edge", style: {
         width: 2, "line-color": "#6d8498", "target-arrow-color": "#8eacbe",
         "target-arrow-shape": "triangle", "curve-style": "bezier",
       } },
+      { selector: "edge.owner-link", style: { "line-style": "dotted", "line-color": "#68738e" } },
       { selector: "edge.session-link", style: { "line-style": "dashed" } },
       { selector: "edge.changed", style: { "line-color": "#f2c080", "target-arrow-color": "#f2c080" } },
     ],
   });
+  selector.value = selected;
+  if (!selector.value) selector.value = "";
+  const selectedNode = cy.getElementById(selector.value);
+  if (selectedNode.length) selectedNode.select();
+  inspectResource(selectedNode.data());
+  highlightLatestEvent(snapshot);
   cy.on("tap", "node", (event) => {
     const item = event.target.data();
-    byId("graph-selection").textContent =
-      [item.id, item.tenant_id, item.criticality, item.currentState].filter(Boolean).join(" · ");
+    selector.value = item.id;
+    inspectResource(item);
   });
   cy.on("tap", "edge", (event) => {
     const { source, target, type } = event.target.data();
-    byId("graph-selection").textContent = [source, label(type), target].join(" · ");
+    const details = byId("graph-selection");
+    details.hidden = false;
+    details.textContent = [source, label(type), target].join(" · ");
+    selector.value = "";
   });
 }
 
-function timeline(events) {
+function timeline(id, events) {
   const key = JSON.stringify(events);
-  if (key === renderEventsKey) return;
-  renderEventsKey = key;
-  const list = byId("events");
+  if (key === renderEventsKeys.get(id)) return;
+  renderEventsKeys.set(id, key);
+  const list = byId(id);
+  if (!events.length) {
+    list.replaceChildren(node("li", "No events recorded.", "empty"));
+    return;
+  }
   const open = new Set([...list.querySelectorAll("li:has(details[open])")].map((item) => item.dataset.event));
   list.replaceChildren(...events.slice().reverse().map((event) => {
     const item = node("li");
@@ -105,6 +173,14 @@ function timeline(events) {
     item.append(node("strong", String(event.sequence).padStart(2, "0")));
     item.append(node("span", label(event.event_type)));
     item.append(node("p", [event.actor_id, event.target_id, label(event.outcome)].join(" · ")));
+    if (event.timestamp) {
+      const time = node("time", new Date(event.timestamp).toLocaleTimeString());
+      time.dateTime = event.timestamp;
+      time.title = event.timestamp;
+      const stamp = node("p");
+      stamp.append(time);
+      item.append(stamp);
+    }
     if (event.payload && Object.keys(event.payload).length) {
       const info = node("details");
       info.open = open.has(item.dataset.event);
@@ -161,13 +237,14 @@ function proposalCard(proposal, manifest, snapshot) {
   const actions = node("div", undefined, "buttons");
   actions.append(actionButton(decision ? "Re-evaluate" : "Evaluate proposal", "evaluate", { proposal_id: id }));
   if (decision?.result === "REQUIRE_APPROVAL") {
+    const role = decision.required_role || "incident_owner";
     const approvers = snapshot.identities.filter((identity) =>
       identity.type === "human" && identity.status === "active" && identity.tenant_id === proposal.tenant_id &&
-      identity.roles?.includes("incident_owner"));
+      identity.roles?.includes(role));
     if (approvers.length) {
       const actor = node("select");
       actor.id = "reviewer-" + id;
-      const actorLabel = node("label", "Incident owner");
+      const actorLabel = node("label", label(role));
       actorLabel.htmlFor = actor.id;
       for (const approver of approvers) {
         const option = node("option", approver.name || approver.id);
@@ -178,13 +255,31 @@ function proposalCard(proposal, manifest, snapshot) {
       actions.append(actionButton("Approve", "approve", () => ({ proposal_id: id, actor: actor.value, accept: true })));
       actions.append(actionButton("Reject", "approve", () => ({ proposal_id: id, actor: actor.value, accept: false })));
     } else {
-      card.append(node("p", "No active incident owner is available."));
+      card.append(node("p", `No active ${label(role)} is available.`));
     }
   }
   if (issued) actions.append(actionButton("Execute scoped action", "execute", { capability_id: issued.id }));
   if (used) actions.append(actionButton("Retry used capability", "execute", { capability_id: used.id }));
   card.append(actions);
   return card;
+}
+
+function process(snapshot) {
+  const transitions = snapshot.events.filter((event) => event.event_type === "process_transition");
+  const key = JSON.stringify([snapshot.incident_id, transitions]);
+  if (key === processKey) return;
+  processKey = key;
+  const steps = [{ to: snapshot.scenario.initial_state }, ...transitions.map((event) => event.payload)];
+  const list = byId("process");
+  list.replaceChildren(...steps.map(({ to, signal }) => {
+    const item = node("li");
+    const badge = node("span", label(to), "pill");
+    if (signal) badge.title = label(signal);
+    item.append(badge);
+    return item;
+  }));
+  list.lastElementChild?.setAttribute("aria-current", "step");
+  list.scrollLeft = list.scrollWidth;
 }
 
 function render() {
@@ -196,6 +291,8 @@ function render() {
   byId("scenario").value = scenario.id;
   byId("scenario").disabled = state.pending || investigating;
   byId("mode").disabled = state.pending || working;
+  byId("speed").disabled = state.pending;
+  byId("speed").value = state.current.speed;
   byId("description").textContent = scenario.description || scenario.name;
   byId("incident").textContent = snapshot.incident_id;
   byId("incident-state").textContent = label(snapshot.state);
@@ -220,11 +317,30 @@ function render() {
   notice.hidden = !notice.textContent;
   notice.classList.toggle("error", state.error || job?.state === "failed");
   graph(snapshot);
-  timeline(snapshot.events);
+  process(snapshot);
+  timeline("attack-events", snapshot.events.filter((event) => event.payload?.fixture_id));
+  timeline("defense-events", snapshot.events.filter((event) => !event.payload?.fixture_id && event.event_type !== "process_transition"));
   byId("proposals").replaceChildren(...(manifest.proposals.length ?
     manifest.proposals.slice().reverse().map((proposal) => proposalCard(proposal, manifest, snapshot)) :
     [node("p", "Run an investigation to see proposed actions.", "empty")]));
+  if (policyKey !== state.current.policy_digest) {
+    policyKey = state.current.policy_digest;
+    renderPolicies(manifest.policies);
+  }
   byId("manifest").textContent = JSON.stringify(manifest, null, 2);
+}
+
+function renderPolicies(configuredPolicies) {
+  const policies = configuredPolicies.map((policy) => {
+    const details = node("details");
+    details.append(node("summary", `${policy.id} · v${policy.version}`));
+    details.append(node("pre", JSON.stringify(policy.rules, null, 2)));
+    return details;
+  });
+  const hash = node("code", policyKey);
+  const digest = node("p", "Policy set SHA-256 ");
+  digest.append(hash);
+  byId("policies").replaceChildren(digest, ...policies);
 }
 
 let timer;
@@ -282,6 +398,14 @@ async function init() {
   state.current = current;
   byId("scenario").addEventListener("change", (event) => run("load", { scenario_id: event.target.value }));
   byId("mode").addEventListener("change", render);
+  byId("speed").addEventListener("change", (event) => run("speed", { speed: Number(event.target.value) }));
+  byId("show-tenants").addEventListener("change", () => graph(state.current.snapshot));
+  byId("resource").addEventListener("change", (event) => {
+    cy.nodes(":selected").unselect();
+    const item = cy.getElementById(event.target.value);
+    if (item.length) item.select();
+    inspectResource(item.data());
+  });
   byId("fit").addEventListener("click", () => cy?.fit(undefined, 34));
   new ResizeObserver(() => cy?.resize().fit(undefined, 34)).observe(byId("graph"));
   for (const button of document.querySelectorAll("[data-action]")) {

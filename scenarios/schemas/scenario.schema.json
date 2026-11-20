@@ -22,7 +22,10 @@
     "actors",
     "roles",
     "metadata",
-    "success_criteria"
+    "success_criteria",
+    "agent_roles",
+    "scenario",
+    "process_id"
   ],
   "properties": {
     "schema_version": {
@@ -44,7 +47,8 @@
       "type": "object",
       "required": [
         "id",
-        "tenant_id"
+        "tenant_id",
+        "classification"
       ],
       "properties": {
         "id": {
@@ -52,6 +56,36 @@
         },
         "tenant_id": {
           "$ref": "#/$defs/id"
+        },
+        "classification": {
+          "type": "object",
+          "required": [
+            "default",
+            "rules"
+          ],
+          "properties": {
+            "default": {
+              "$ref": "#/$defs/severity"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "event_id",
+                  "severity"
+                ],
+                "properties": {
+                  "event_id": {
+                    "$ref": "#/$defs/id"
+                  },
+                  "severity": {
+                    "$ref": "#/$defs/severity"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -86,7 +120,25 @@
     "tenants": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/entity"
+        "allOf": [
+          {
+            "$ref": "#/$defs/entity"
+          },
+          {
+            "required": [
+              "description",
+              "contact_role"
+            ],
+            "properties": {
+              "description": {
+                "$ref": "#/$defs/id"
+              },
+              "contact_role": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        ]
       }
     },
     "assets": {
@@ -110,9 +162,12 @@
               },
               "type": {
                 "enum": [
-                  "vm",
-                  "host",
-                  "service"
+                  "hypervisor_host",
+                  "backup_service",
+                  "virtual_machine",
+                  "service",
+                  "network",
+                  "management_plane"
                 ]
               },
               "state": {
@@ -375,11 +430,57 @@
     "roles": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/entity"
+        "$ref": "#/$defs/role"
       }
     },
     "metadata": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "environment",
+        "language",
+        "category",
+        "domain"
+      ],
+      "properties": {
+        "environment": {
+          "const": "synthetic simulator"
+        },
+        "language": {
+          "const": "en"
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "domain": {
+          "type": "object",
+          "required": [
+            "name",
+            "version",
+            "resource_kinds",
+            "dependency_direction"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "const": 1
+            },
+            "resource_kinds": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string"
+              }
+            },
+            "dependency_direction": {
+              "const": "source depends on target"
+            }
+          }
+        }
+      }
     },
     "success_criteria": {
       "type": "array",
@@ -387,6 +488,34 @@
       "items": {
         "type": "string",
         "minLength": 1
+      }
+    },
+    "agent_roles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/role"
+      }
+    },
+    "process_id": {
+      "$ref": "#/$defs/id"
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/id"
+        }
       }
     }
   },
@@ -485,7 +614,10 @@
             "vm.stop",
             "vm.snapshot",
             "inventory.list",
-            "asset.inspect"
+            "asset.inspect",
+            "identity.inspect",
+            "session.inspect",
+            "service.health"
           ]
         },
         "target_id": {
@@ -504,6 +636,43 @@
           "$ref": "#/$defs/id"
         }
       }
+    },
+    "severity": {
+      "enum": [
+        "unclassified",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "role": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/entity"
+        },
+        {
+          "required": [
+            "authority",
+            "permissions"
+          ],
+          "properties": {
+            "authority": {
+              "enum": [
+                "human",
+                "advisory",
+                "deterministic"
+              ]
+            },
+            "permissions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

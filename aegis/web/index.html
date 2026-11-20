@@ -39,19 +39,21 @@
       <section class="panel graph-panel">
         <div class="panel-head">
           <div><h2>Dependency graph</h2><p>Arrows point to the resources each component depends on.</p></div>
-          <button id="fit" class="quiet" type="button">Fit view</button>
+          <div class="graph-actions"><label class="toggle"><input id="show-tenants" type="checkbox"> Show tenant ownership</label><button id="fit" class="quiet" type="button">Fit view</button></div>
         </div>
         <div id="graph" aria-label="Dependency graph"></div>
         <div class="graph-footer">
-          <div class="legend"><span><i class="key"></i> Asset</span><span><i class="key shared"></i> Shared asset</span><span><i class="key identity"></i> Identity</span><span><i class="key inactive"></i> Changed state</span></div>
-          <span id="graph-selection">Select a resource to inspect it.</span>
+          <div class="legend"><span><i class="key"></i> Asset</span><span><i class="key shared"></i> Shared asset</span><span><i class="key identity"></i> Identity / session</span><span><i class="key inactive"></i> Changed state</span></div>
+          <select id="resource" aria-label="Inspect a resource"><option value="">Inspect a resource</option></select>
         </div>
+        <div id="graph-selection" class="resource-details" aria-live="polite" hidden></div>
       </section>
       <section class="panel controls">
         <div class="panel-head"><div><h2>Simulation controls</h2><p>Replay evidence and govern proposed actions.</p></div></div>
         <div class="control-content">
           <div>
             <h3>Event replay</h3>
+            <div class="speed"><label for="speed">Playback speed</label><select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
             <div class="buttons"><button type="button" data-action="step">Next event</button><button type="button" data-action="replay">Play scenario</button><button type="button" data-action="pause" hidden>Pause</button></div>
           </div>
           <div>
@@ -67,18 +69,24 @@
         </div>
       </section>
     </div>
+    <section class="panel process">
+      <div class="panel-head"><div><h2>Response process</h2><p>Recorded incident state transitions in order.</p></div></div>
+      <ol id="process" aria-label="Incident state transitions"></ol>
+    </section>
     <div class="split detail-split">
       <section class="panel">
         <div class="panel-head"><div><h2>Decision workspace</h2><p>Review impact, approve gated actions, and verify execution.</p></div></div>
         <div id="proposals" class="records"><p class="empty">Run an investigation to see proposed actions.</p></div>
       </section>
       <section class="panel">
-        <div class="panel-head"><div><h2>Event timeline</h2><p>Recorded activity for the current incident.</p></div></div>
-        <ol id="events" class="records timeline"></ol>
+        <div class="panel-head"><div><h2>Incident timelines</h2><p>Recorded activity for the current incident.</p></div></div>
+        <section class="event-track"><h3>Simulated attack</h3><ol id="attack-events" class="records timeline"></ol></section>
+        <section class="event-track"><h3>Defense response</h3><ol id="defense-events" class="records timeline"></ol></section>
       </section>
     </div>
     <section class="panel manifest">
       <div class="panel-head"><div><h2>Incident manifest</h2></div><a class="button-link" href="/api/v1/manifest" download>Export JSON</a></div>
+      <details><summary>Configured policies</summary><div id="policies"></div></details>
       <details><summary>View manifest</summary><pre id="manifest"></pre></details>
     </section>
     <footer>VERA Aegis <span>•</span> Local cyber-recovery simulation</footer>

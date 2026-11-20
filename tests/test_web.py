@@ -46,7 +46,7 @@ class WebTests(unittest.TestCase):
         return body
 
     def wait_for_job(self):
-        for _ in range(160):
+        for _ in range(240):
             status, body, _ = self.request("/api/v1/state")
             self.assertEqual(status, 200)
             if body["job"]["state"] != "running":
@@ -77,6 +77,7 @@ class WebTests(unittest.TestCase):
         self.assertGreaterEqual(len(catalog), 2)
         initial = self.action("load", {"scenario_id": "control-plane-compromise"})
         self.assertEqual(initial["snapshot"]["cursor"], 0)
+        self.assertEqual(self.action("speed", {"speed": 4})["speed"], 4)
         started = self.action("replay")
         self.assertEqual(started["job"]["state"], "running")
         result = self.wait_for_job()

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ DETERMINISTIC_REPLAY = "DETERMINISTIC_REPLAY"
 MODES = (CLAUDE, DETERMINISTIC_REPLAY)
 SERVER = "aegis"
 MAX_TOOL_RESPONSE_BYTES = 24_000
+MAX_EXTERNAL_CONFIG_BYTES = 65_536
 BUILTIN_DENY = [
     "Agent", "Task", "Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep",
     "NotebookEdit", "WebFetch", "WebSearch", "Skill", "AskUserQuestion",
@@ -77,8 +79,24 @@ TOOLS = {
 def _external_config():
     """Read trusted external MCP configuration from the operator environment."""
     raw = os.environ.get("AEGIS_EXTERNAL_MCP_CONFIG", "")
+    filename = os.environ.get("AEGIS_EXTERNAL_MCP_CONFIG_FILE", "")
+    if raw and filename:
+        raise ValueError("Specify either inline or file-based external MCP configuration.")
+    if filename:
+        try:
+            with Path(filename).open("rb") as stream:
+                data = stream.read(MAX_EXTERNAL_CONFIG_BYTES + 1)
+            if len(data) > MAX_EXTERNAL_CONFIG_BYTES:
+                raise ValueError("External MCP configuration exceeds the size limit.")
+            raw = data.decode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("External MCP configuration file must be readable UTF-8 JSON.") from exc
+        if not raw:
+            raise ValueError("External MCP configuration file is empty.")
     if not raw:
         return {}, []
+    if len(raw.encode("utf-8")) > MAX_EXTERNAL_CONFIG_BYTES:
+        raise ValueError("External MCP configuration exceeds the size limit.")
     try:
         entries = json.loads(raw)
     except ValueError as exc:
@@ -145,6 +163,17 @@ def _limit(name, default, minimum, maximum):
     return value
 
 
+def _cost_limit():
+    name = "AEGIS_CLAUDE_MAX_BUDGET_USD"
+    try:
+        amount = Decimal(os.environ.get(name, "1.00"))
+        if amount.is_finite() and Decimal("0.05") <= amount <= Decimal("5.00"):
+            return float(amount)
+    except InvalidOperation:
+        pass
+    raise ValueError(f"{name} must be an amount from 0.05 to 5.00.")
+
+
 def _incident_events(snapshot):
     fixture_ids = {event["id"] for event in snapshot["scenario"]["events"]}
     events = []
@@ -186,6 +215,7 @@ def _incident_graph(snapshot):
             break
         nodes.update(adjacent)
     return {
+        "context_revision": snapshot["revision"],
         "assets": [_fields(asset, "id", "tenant_id", "type", "shared", "criticality", "state")
                    for asset in snapshot["assets"] if asset["id"] in nodes],
         "dependencies": [_fields(edge, "source", "target", "type")
@@ -223,6 +253,20 @@ def _observations(result, include_rows):
     return {"type": type(result).__name__}
 
 
+# The model cannot choose the logical role attached to a call.
+TOOL_ROLES = {
+    "submit_response_proposal": ("response_planner", "proposal.submit"),
+    "simulate_containment": ("investigator", "impact.simulate"),
+    "get_asset_graph": ("investigator", "inventory.read"),
+    "get_asset_dependencies": ("investigator", "inventory.read"),
+    "get_existing_sessions": ("investigator", "inventory.read"),
+    "get_identity_context": ("investigator", "inventory.read"),
+    "get_incident_events": ("investigator", "incident.read"),
+    "get_applicable_policies": ("investigator", "incident.read"),
+    "get_previous_decisions": ("investigator", "incident.read"),
+}
+
+
 class InvestigationTools:
     def __init__(self, core, gov, mode):
         self.core = core
@@ -239,6 +283,12 @@ class InvestigationTools:
 
     def call(self, name, arguments):
         try:
+            if name not in TOOL_ROLES:
+                raise ValueError("Unknown investigation tool")
+            role, permission = TOOL_ROLES[name]
+            configured = self.core.snapshot()["scenario"]["agent_roles"]
+            if not any(r["id"] == role and permission in r["permissions"] for r in configured):
+                raise ValueError("Tool is outside the configured role")
             result = self._call(name, arguments)
             if len(json.dumps(result, default=str).encode()) > MAX_TOOL_RESPONSE_BYTES:
                 raise ValueError("Tool response exceeded the incident response size limit.")
@@ -261,14 +311,21 @@ class InvestigationTools:
             self.proposal_ids.append(proposal_id)
             return {"proposal_id": proposal_id}
         if name == "get_applicable_policies":
+            snapshot = self.core.snapshot()
+            scenario = snapshot["scenario"]
             policies = [
                 {
                     **_fields(policy, "id", "version"),
                     "rules": [_fields(rule, "priority", "when", "result", "reason") for rule in policy["rules"]],
                 }
-                for policy in self.gov.manifest()["policies"]
+                for policy in scenario["policies"]
             ]
-            return {"policies": policies, "action_target_collections": TARGETS}
+            return {
+                "scenario": _fields(scenario, "id", "name"),
+                "incident_id": snapshot["incident_id"],
+                "policies": policies,
+                "action_target_collections": TARGETS,
+            }
         if name == "simulate_containment":
             return self._impact(arguments)
         snapshot = self.core.snapshot()
@@ -374,7 +431,14 @@ def _sdk_options(sdk, investigation, cwd):
         name = payload["tool_name"]
         if name in external_tools:
             outcome = "error" if payload["hook_event_name"] == "PostToolUseFailure" else "success"
-            investigation.audit(name, outcome, payload.get("tool_response"))
+            response = payload.get("tool_response")
+            if outcome == "success" and len(json.dumps(response, default=str).encode()) > MAX_TOOL_RESPONSE_BYTES:
+                investigation.audit(name, "error")
+                return {"hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "updatedMCPToolOutput": "External tool response exceeded the incident response size limit.",
+                }}
+            investigation.audit(name, outcome, response)
         return {}
 
     return sdk.ClaudeAgentOptions(
@@ -395,7 +459,7 @@ def _sdk_options(sdk, investigation, cwd):
         cwd=cwd,
         model=os.environ.get("AEGIS_CLAUDE_MODEL", "sonnet"),
         max_turns=_limit("AEGIS_CLAUDE_MAX_TURNS", 18, 1, 24),
-        max_budget_usd=1.0,
+        max_budget_usd=_cost_limit(),
         task_budget={"total": _limit("AEGIS_CLAUDE_MAX_TOKENS", 30000, 20000, 50000)},
         extra_args={"no-session-persistence": None, "disable-slash-commands": None},
         env=_cli_env(cwd),

@@ -146,6 +146,22 @@ class InvestigationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "absolute executable"):
                 _external_config()
 
+    def test_external_config_accepts_operator_file(self):
+        with TemporaryDirectory() as directory:
+            filename = Path(directory) / "mcp.json"
+            filename.write_text(
+                '[{"name":"files","type":"http","url":"https://mcp.example.test",'
+                '"read_tools":["read_event"]}]',
+                encoding="utf-8",
+            )
+            settings = {"AEGIS_EXTERNAL_MCP_CONFIG_FILE": str(filename)}
+            with patch.dict(os.environ, settings, clear=True):
+                _, tools = _external_config()
+                self.assertEqual(tools, ["mcp__files__read_event"])
+                with patch.dict(os.environ, {"AEGIS_EXTERNAL_MCP_CONFIG": "[]"}):
+                    with self.assertRaisesRegex(ValueError, "either inline or file"):
+                        _external_config()
+
     def test_sdk_setup_uses_an_exact_allowlist(self):
         try:
             import claude_agent_sdk as sdk

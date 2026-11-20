@@ -8,7 +8,7 @@ from pathlib import Path
 
 SCENARIOS = Path(__file__).resolve().parent.parent / "scenarios"
 ACTIONS = {
-    "inventory.list": ("assets", None, None),
+    "inventory.list": ("tenants", None, None),
     "asset.inspect": ("assets", None, None),
     "identity.inspect": ("identities", None, None),
     "session.inspect": ("sessions", None, None),
@@ -31,7 +31,11 @@ POLICY_RESULTS = {"ALLOW", "REQUIRE_APPROVAL", "DENY", "HOLD"}
 READ_ACTIONS = {action for action, (_, field, _) in ACTIONS.items() if field is None}
 REPLAY_WRITES = {"vm.start", "vm.stop", "vm.snapshot"}
 REPLAY_ACTIONS = READ_ACTIONS | REPLAY_WRITES
-TARGET_TYPES = {"host.stop": "host", "service.health": "service", **{action: "vm" for action in REPLAY_WRITES}}
+ASSET_TYPES = {"virtual_machine", "hypervisor_host", "service", "backup_service", "network", "management_plane"}
+TARGET_TYPES = {
+    "host.stop": "hypervisor_host", "service.health": "service",
+    **{action: "virtual_machine" for action in REPLAY_WRITES},
+}
 SEVERITIES = ("unclassified", "low", "medium", "high", "critical")
 
 
@@ -61,6 +65,8 @@ def _resolve(action, target, records):
     if collection is None:
         return None
     record = records(collection).get(target)
+    if action == "service.health" and record and record.get("type") == "backup_service":
+        return record
     required_type = TARGET_TYPES.get(action)
     return record if record and (required_type is None or record.get("type") == required_type) else None
 
@@ -110,12 +116,18 @@ def validate(scenario):
     for collection in COLLECTIONS:
         if any(not isinstance(item.get("name"), str) or not item["name"] for item in scenario[collection]):
             raise ValueError(f"{collection} entries require a name")
+    source = scenario.get("scenario")
+    if source != {key: scenario[key] for key in ("id", "name", "description")}:
+        raise ValueError("Scenario source metadata must match its ID, name and description")
+    for tenant in scenario["tenants"]:
+        if not all(isinstance(tenant.get(key), str) and tenant[key] for key in ("description", "contact_role")):
+            raise ValueError("Tenant requires a description and contact role")
     for asset in scenario["assets"]:
         if not _member(asset.get("tenant_id"), ids["tenants"]):
             raise ValueError("Unknown asset tenant")
         if (not isinstance(asset.get("shared"), bool) or asset.get("state") not in ("running", "stopped")
             or asset.get("criticality") not in ("normal", "critical")
-            or asset.get("type") not in ("vm", "host", "service")):
+            or not _member(asset.get("type"), ASSET_TYPES)):
             raise ValueError("Assets require shared, criticality, type and state")
     for identity in scenario["identities"]:
         if not _member(identity.get("tenant_id"), ids["tenants"]):
@@ -220,12 +232,26 @@ def validate(scenario):
     agent_role_ids = _unique(scenario.get("agent_roles"), "agent roles")
     if role_ids & agent_role_ids:
         raise ValueError("Agent roles must be distinct from human roles")
+    for role in (*scenario["roles"], *scenario["agent_roles"]):
+        if role.get("authority") not in ("human", "advisory", "deterministic"):
+            raise ValueError("Invalid role authority")
+        permissions = role.get("permissions")
+        if not isinstance(permissions, list) or any(not isinstance(permission, str) or not permission for permission in permissions):
+            raise ValueError("Roles require a list of permissions")
     for identity in scenario["identities"]:
         roles = identity.get("roles", [])
         if not isinstance(roles, list) or any(not _member(role, role_ids) for role in roles):
             raise ValueError("Invalid identity role")
-    if not isinstance(scenario.get("metadata"), dict):
-        raise ValueError("Scenario requires metadata")
+    metadata = scenario.get("metadata")
+    if (not isinstance(metadata, dict) or metadata.get("environment") != "synthetic simulator"
+        or metadata.get("language") != "en" or not isinstance(metadata.get("category"), str)):
+        raise ValueError("Scenario requires normalized synthetic domain metadata")
+    domain = metadata.get("domain")
+    if (not isinstance(domain, dict) or not isinstance(domain.get("name"), str)
+        or domain.get("version") != 1 or domain.get("dependency_direction") != "source depends on target"
+        or not isinstance(domain.get("resource_kinds"), list)
+        or any(not isinstance(kind, str) for kind in domain["resource_kinds"])):
+        raise ValueError("Invalid domain descriptor")
     criteria = scenario.get("success_criteria")
     if not isinstance(criteria, list) or not criteria or any(not isinstance(item, str) or not item for item in criteria):
         raise ValueError("Scenario requires success criteria")
@@ -249,8 +275,11 @@ def validate(scenario):
     for signals in transitions.values():
         if not isinstance(signals, dict) or any(not _member(target, transitions) for target in signals.values()):
             raise ValueError("Invalid state transition")
-    _unique(scenario.get("processes"), "processes")
-    process = next((item for item in scenario["processes"] if item["id"] == "incident-response"), {})
+    process_ids = _unique(scenario.get("processes"), "processes")
+    process_id = scenario.get("process_id")
+    if not _member(process_id, process_ids):
+        raise ValueError("Unknown active scenario process")
+    process = _index(scenario["processes"])[process_id]
     if process.get("transitions") != transitions or process.get("initial_state") != scenario["initial_state"]:
         raise ValueError("Incident response process must match scenario transitions")
     return scenario
@@ -437,7 +466,9 @@ class Core:
             dependents.setdefault(edge["target"], []).append(edge["source"])
         for session in sessions.values():
             dependents.setdefault(session["identity_id"], []).append(session["id"])
-            dependents.setdefault(session["id"], []).extend(grant["target"] for grant in session["permissions"])
+            dependents.setdefault(session["id"], []).extend(
+                grant["target"] for grant in session["permissions"] if grant["action"] in REPLAY_WRITES
+            )
         direct = set(dependents.get(target, ())) - {target}
         while frontier:
             for dependent in dependents.get(frontier.pop(), ()):
@@ -457,7 +488,7 @@ class Core:
             "tenants": sorted(tenants),
             "foreign_tenants": foreign_tenants,
             "critical_shared": critical_shared,
-            "critical_services": [item for item in critical if assets[item]["type"] == "service"],
+            "critical_services": [item for item in critical if assets[item]["type"] in ("service","backup_service")],
             "affected": sorted(affected),
             "direct": sorted(direct),
             "transitive": sorted(affected - direct - {target}),
@@ -467,10 +498,12 @@ class Core:
             },
         }
 
-    def read(self, connection, action, record):
+    def _read_result(self, connection, action, record):
         if action == "inventory.list":
-            return {"items": [
-                {key: record[key] for key in ("id", "name", "type", "state")}
+            assets = self.get(connection, "assets", [])
+            return {"tenant_id": record["id"], "items": [
+                {key: asset[key] for key in ("id", "name", "type", "state")}
+                for asset in assets if asset["tenant_id"] == record["id"]
             ]}
         if action == "service.health":
             assets = _index(self.get(connection, "assets", []))
@@ -504,7 +537,7 @@ class Core:
         if record is None:
             raise ValueError("Unknown or incompatible action target")
         if action in READ_ACTIONS:
-            return self.read(connection, action, record)
+            return self._read_result(connection, action, record)
         if action == "vm.snapshot":
             value = record.get(field, 0) + 1
         changed = field is not None and record.get(field) != value
@@ -533,7 +566,8 @@ class Core:
         if record is None:
             return False
         identity = _index(self.get(connection, "identities", [])).get(session["identity_id"])
-        if identity is None or identity["status"] != "active" or identity["tenant_id"] != record["tenant_id"]:
+        target_tenant = record["id"] if TARGETS[action] == "tenants" else record["tenant_id"]
+        if identity is None or identity["status"] != "active" or identity["tenant_id"] != target_tenant:
             return False
         required_grant = {"action": action, "target": target}
         return required_grant in session["permissions"] and required_grant in identity["permissions"]

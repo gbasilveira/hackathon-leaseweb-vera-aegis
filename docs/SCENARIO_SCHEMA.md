@@ -7,3 +7,5 @@ The tenant and infrastructure collections form the initial inventory. Dependenci
 The incident process maps a state and event signal to a destination state. Runtime components emit signals after completing their work. Policy rules carry a numeric priority, condition, result and stable reason code. A terminal default denial protects unmatched combinations. The proposal phases select the initial or alternative responses for deterministic investigation.
 
 Inspect either bundled fixture with `python -m aegis config-export SCENARIO`. Use `config-import` to validate and create a new local scenario file. This command refuses to overwrite an existing file.
+
+The incident classification table maps observed event IDs to severity levels. As fixture evidence arrives, the highest matching severity is reflected in the incident snapshot. Session validity durations are relative to scenario load time, so the configured expired and active sessions behave consistently on the presentation machine.
