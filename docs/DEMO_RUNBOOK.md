@@ -63,6 +63,35 @@ can be stale, and a compromised planner can doctor it. Neither widens what the
 gateway permits, because the gateway does not trust the snapshot the decision
 was made against; it checks the world itself at the instant of use.
 
+### Autonomous containment, end to end
+
+With the three units running, nothing needs driving. Watch the journal in one
+terminal and run the adversary in another, against a guest that is not already
+contained:
+
+```sh
+sudo journalctl -u aegis-sensor -u aegis-planner -u aegis-gateway -f
+sudo -u demo-attacker ./deploy/attacker.sh tenant-b--sandbox
+```
+
+The order of what appears is the whole argument. The sensor seals a change on
+that guest's snapshot count, read from the hypervisor and not from anything the
+guest said. The planner, which cannot open libvirt at all, reads that sealed
+observation, proposes containment, evaluates it against the published topology
+and mints a single-use handle. The gateway recomputes the scoped digest from
+live libvirt, spends the handle once, drops the interface link and re-reads the
+domain to confirm it.
+
+Three processes, three privilege envelopes, one sealed chain. The adversary
+shares nothing with any of them but the hypervisor.
+
+Release it the same way as the walkthrough:
+
+```sh
+sudo python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json \
+    release --target tenant-b--sandbox
+```
+
 Two sentences worth saying out loud. The model never holds a credential: it
 proposes, and the only thing that can act is a single-use handle bound to a hash
 of the request and of the observed world, revalidated at the instant of use. We

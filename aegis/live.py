@@ -489,18 +489,34 @@ def cmd_observe(args):
     assert_role("sensor", args.uri, enforce=not args.no_privsep)
     plane = _plane(args)
     store = FileStore(args.store)
+    # The journal records changes, not a heartbeat. Sealing every poll would add
+    # one entry per guest every few seconds, and since the store is rewritten
+    # whole on each append, an afternoon of running would make it slow and its
+    # evidence unreadable. Byte counters are excluded from the comparison
+    # because they always differ; what is compared is what could carry
+    # authority.
+    seen = {}
     while True:
         store.publish_topology(plane.discover())
         separated = authority_facts(plane.observe())
+        changed = []
         for fact in separated["facts"]:
+            signature = (fact.get("state"), fact.get("snapshots"), tuple(sorted((fact.get("links") or {}).items())))
+            if seen.get(fact["target_id"]) == signature:
+                continue
+            seen[fact["target_id"]] = signature
+            changed.append(fact)
             store.journal(dict(fact, event_type="hypervisor.observed", outcome="observed"))
         for ignored in separated["excluded"]:
             store.journal(
                 dict(ignored, event_type="guest.reported", outcome="excluded_from_decisions")
             )
         _say(
-            f"published topology, sealed {len(separated['facts'])} hypervisor "
-            f"observation(s), excluded {len(separated['excluded'])} guest report(s)"
+            f"published topology for {len(separated['facts'])} guest(s); sealed "
+            f"{len(changed)} change(s)"
+            + (f": {', '.join(f['target_id'] for f in changed)}" if changed else "")
+            + (f"; excluded {len(separated['excluded'])} guest report(s)"
+               if separated["excluded"] else "")
         )
         if args.once:
             return 0
