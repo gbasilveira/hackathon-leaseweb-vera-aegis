@@ -193,6 +193,43 @@ def _plane(args, writable=True):
     )
 
 
+#: Nodes the walkthrough writes into the catalogue, and only these are ever
+#: removed from it: an operator's real service entries are not ours to delete.
+DEMO_NODES = ("svc-unrelated", "svc-billing")
+
+
+def _catalogue_read(path):
+    try:
+        return json.loads(open(path).read())
+    except (OSError, ValueError):
+        return {"nodes": {}, "edges": []}
+
+
+def _catalogue_write(path, declared):
+    open(path, "w").write(json.dumps(declared, indent=2))
+
+
+def _catalogue_drop(path, names):
+    declared = _catalogue_read(path)
+    declared["nodes"] = {
+        key: value
+        for key, value in declared.get("nodes", {}).items()
+        if key not in names
+    }
+    declared["edges"] = [
+        edge for edge in declared.get("edges", []) if edge.get("source") not in names
+    ]
+    _catalogue_write(path, declared)
+
+
+def _catalogue_add(path, entry):
+    """Write a service entry the way a CMDB update would."""
+    declared = _catalogue_read(path)
+    declared.setdefault("nodes", {}).update(entry.get("nodes", {}))
+    declared.setdefault("edges", []).extend(entry.get("edges", []))
+    _catalogue_write(path, declared)
+
+
 def _say(text=""):
     print(text, flush=True)
 
@@ -228,7 +265,13 @@ def cmd_privileges(args):
     from .privsep import matrix
 
     for row in matrix(args.uri):
-        state = "ok" if row["ok"] else "VIOLATION"
+        state = (
+            "ok"
+            if row["ok"]
+            else "VIOLATION"
+            if row["violations"]
+            else "NOT OPERATIONAL"
+        )
         _say(f"\033[1m{row['role']}\033[0m  {row['summary']}  [{state}]")
         _say(
             f"  libvirt: may hold {row['libvirt_expected']!r}, observed "
@@ -240,6 +283,8 @@ def cmd_privileges(args):
         )
         for violation in row["violations"]:
             _say(f"  \033[31m! {violation}\033[0m")
+        for shortfall in row["shortfalls"]:
+            _say(f"  \033[33m? {shortfall}\033[0m")
     return 0
 
 
@@ -249,39 +294,14 @@ def cmd_demo(args):
     target, action = args.target, args.action
     catalogue = args.catalogue if isinstance(args.catalogue, str) else None
 
-    DEMO_NODES = ("svc-unrelated", "svc-billing")
-
     def reset():
-        """Drop only what a previous run of this walkthrough added."""
-        if not catalogue:
-            return
-        try:
-            declared = json.loads(open(catalogue).read())
-        except (OSError, ValueError):
-            declared = {"nodes": {}, "edges": []}
-        declared["nodes"] = {
-            key: value
-            for key, value in declared.get("nodes", {}).items()
-            if key not in DEMO_NODES
-        }
-        declared["edges"] = [
-            edge
-            for edge in declared.get("edges", [])
-            if edge.get("source") not in DEMO_NODES
-        ]
-        open(catalogue, "w").write(json.dumps(declared, indent=2))
+        if catalogue:
+            _catalogue_drop(catalogue, DEMO_NODES)
 
     def mutate(entry):
-        """Write a service-catalogue entry the way a CMDB update would."""
         if not catalogue:
             raise SystemExit("--catalogue is required for the drift acts")
-        try:
-            declared = json.loads(open(catalogue).read())
-        except (OSError, ValueError):
-            declared = {"nodes": {}, "edges": []}
-        declared.setdefault("nodes", {}).update(entry.get("nodes", {}))
-        declared.setdefault("edges", []).extend(entry.get("edges", []))
-        open(catalogue, "w").write(json.dumps(declared, indent=2))
+        _catalogue_add(catalogue, entry)
 
     reset()
     topology = plane.discover()
@@ -455,6 +475,54 @@ def cmd_gateway(args):
     return 0
 
 
+def cmd_release(args):
+    """Lift containment, once the world allows it.
+
+    Act 6 refuses to release isolation while a critical service in another
+    tenant depends on the target, and act 7 denies the proposal outright. That
+    refusal is conditional, not permanent, which is the part an audience will
+    ask about: the guest is not bricked. When the dependency goes away the same
+    proposal is allowed and the same handle mechanism executes it.
+
+    It is also how an operator cleans up after a demonstration, and it goes
+    through the full governance path rather than around it. Reaching for virsh
+    would work and would prove nothing.
+    """
+    plane = _plane(args)
+    incident = LiveIncident(plane)
+    catalogue = args.catalogue if isinstance(args.catalogue, str) else None
+
+    _say(f"state now: {plane.read_state(args.target)}")
+    if catalogue and not args.keep_catalogue:
+        _catalogue_drop(catalogue, DEMO_NODES)
+        _say(f"removed the walkthrough's catalogue entries: {', '.join(DEMO_NODES)}")
+        _say("the dependency that revoked the pending handle is gone")
+
+    proposal = incident.propose(
+        args.action, args.target, "Release containment after review.", ["obs-1"]
+    )
+    decision = incident.evaluate(proposal)
+    _say()
+    _say(f"proposal: {args.action} on {args.target}")
+    _say(f"  -> {decision['result']} / {decision['reason']}")
+    _say(
+        f"  blast radius: {decision['facts']['tenant_count']} tenant(s) "
+        f"{decision['facts']['blast_tenants']}"
+    )
+    capability = incident.issue(proposal, decision)
+    if not capability:
+        _say("  no handle issued, so containment stays in place")
+        _say("  that is the correct outcome: a human decides from here")
+        return 1
+    result = incident.execute(capability)
+    _say(f"  gateway: {result['result']}")
+    if "after" in result:
+        _say(f"  after : {result['after']}")
+    for line in result.get("reasons", []):
+        _say(f"    · {line}")
+    return 0 if result["result"] == "VERIFIED" else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="aegis.live", description=__doc__)
     parser.add_argument("--uri", default="qemu:///system")
@@ -472,6 +540,11 @@ def main(argv=None):
     observe.add_argument("--once", action="store_true")
     observe.set_defaults(run=cmd_observe)
     sub.add_parser("gateway").set_defaults(run=cmd_gateway)
+    release = sub.add_parser("release")
+    release.add_argument("--target", required=True)
+    release.add_argument("--action", default="network.restore", choices=sorted(ACTIONS))
+    release.add_argument("--keep-catalogue", action="store_true")
+    release.set_defaults(run=cmd_release)
     demo = sub.add_parser("demo")
     demo.add_argument("--target", required=True)
     demo.add_argument("--action", default="network.isolate", choices=sorted(ACTIONS))

@@ -49,9 +49,25 @@ do not claim the model's proposals are good; we claim a bad one cannot reach the
 hypervisor.
 
 Afterwards the target guest is left contained, because act 6 correctly refused
-to release it. That is the right outcome, not a loose end. Release it manually:
+to release it. That is the right outcome, not a loose end, and it is worth
+saying so before anyone asks whether the guest is now bricked. Then show that
+the refusal was conditional:
 
 ```sh
-sudo virsh domif-setlink tenant-b--app --interface <mac> up
-sudo ./deploy/provision.sh --destroy   # or remove everything
+sudo python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json \
+    release --target tenant-b--app
+```
+
+`release` removes the walkthrough's own catalogue entries, nothing else, so the
+dependency that revoked the pending handle is gone. The same proposal is then
+evaluated again, allowed, issued a fresh handle and executed, and the link
+comes back up. It goes through the whole governance path rather than around it;
+reaching for `virsh` here would work and would prove nothing.
+
+Run it before the pitch as well as after, so the host starts clean.
+
+To remove the guests, networks and accounts entirely:
+
+```sh
+sudo ./deploy/provision.sh --destroy
 ```

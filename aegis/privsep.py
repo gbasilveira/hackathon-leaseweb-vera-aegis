@@ -75,16 +75,29 @@ def inspect(role, uri="qemu:///system"):
     ranks = {"none": 0, "read-only": 1, "read-write": 2}
     observed = _libvirt_access(uri)
     credentials = _credentials_present()
-    violations = []
+    # Two different failures, kept apart on purpose. Holding more access than
+    # the role allows is a security failure. Holding less is an operational one:
+    # a gateway that cannot write cannot contain anything, and reporting that as
+    # healthy means discovering it at the first actuation, mid-incident. The
+    # first version of this check only looked upward and called such a gateway
+    # ok, which is how a component gets deployed broken.
+    violations, shortfalls = [], []
     if ranks[observed] > ranks[expected["libvirt"]]:
         violations.append(
             f"{role} may hold {expected['libvirt']!r} libvirt access but holds "
             f"{observed!r} on {uri}"
         )
+    elif ranks[observed] < ranks[expected["libvirt"]]:
+        shortfalls.append(
+            f"{role} needs {expected['libvirt']!r} libvirt access but holds "
+            f"{observed!r} on {uri}, so it would fail at its first use"
+        )
     if credentials and not expected["model_credentials"]:
         violations.append(
             f"{role} must not see model credentials but found {', '.join(credentials)}"
         )
+    if expected["model_credentials"] and not credentials:
+        shortfalls.append(f"{role} needs a model credential and none is present")
     return {
         "role": role,
         "summary": expected["summary"],
@@ -96,16 +109,28 @@ def inspect(role, uri="qemu:///system"):
         "uid": os.getuid(),
         "groups": sorted(os.getgroups()),
         "violations": violations,
-        "ok": not violations,
+        "shortfalls": shortfalls,
+        "ok": not violations and not shortfalls,
+        "secure": not violations,
     }
 
 
-def assert_role(role, uri="qemu:///system", enforce=True):
-    """Fail closed when the running process holds a forbidden privilege."""
+def assert_role(role, uri="qemu:///system", enforce=True, require_capability=False):
+    """Fail closed on a forbidden privilege, and optionally on a missing one.
+
+    `require_capability` is off by default so that a single-process driver and
+    the test suite can run without the deployed socket layout. A deployed
+    service should turn it on: starting a gateway that cannot reach the
+    hypervisor only moves the failure to the worst possible moment.
+    """
     report = inspect(role, uri)
     if report["violations"] and enforce:
         raise PrivilegeError(
             f"refusing to start as {role}: " + "; ".join(report["violations"])
+        )
+    if report["shortfalls"] and enforce and require_capability:
+        raise PrivilegeError(
+            f"cannot operate as {role}: " + "; ".join(report["shortfalls"])
         )
     return report
 
