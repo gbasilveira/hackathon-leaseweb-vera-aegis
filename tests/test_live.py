@@ -2,8 +2,8 @@
 
 import unittest
 
-from aegis.gateway import MemoryStore
-from aegis.live import LiveIncident, decide, facts
+from aegis.gateway import Gateway, MemoryStore
+from aegis.live import LiveIncident, _suspect, decide, facts
 from tests.test_gateway import FakePlane
 
 #: Mirrors what discovery reports on a provisioned host: one network carrying
@@ -139,3 +139,109 @@ class EndToEndTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlannerWithoutAPlaneTest(unittest.TestCase):
+    """The planner process holds no hypervisor, so it must work from what the
+    sensor published and must be unable to act by itself."""
+
+    def setUp(self):
+        self.plane = FakePlane()
+        self.published = self.plane.discover()
+        self.incident = LiveIncident(
+            plane=None, store=MemoryStore(), topology=self.published
+        )
+
+    def test_it_can_propose_evaluate_and_issue(self):
+        proposal = self.incident.propose(
+            "network.isolate", "vm-a", "Bulk capture observed.", ["libvirt:vm-a"]
+        )
+        decision = self.incident.evaluate(proposal)
+        self.assertEqual(decision["result"], "ALLOW")
+        self.assertIsNotNone(self.incident.issue(proposal, decision))
+
+    def test_it_cannot_execute_anything_itself(self):
+        self.assertIsNone(self.incident.gateway)
+        proposal = self.incident.propose("network.isolate", "vm-a", "x", ["e"])
+        capability = self.incident.issue(proposal, self.incident.evaluate(proposal))
+        with self.assertRaises(RuntimeError):
+            self.incident.execute(capability)
+        self.assertEqual(self.plane.calls, [])
+
+    def test_a_stale_view_cannot_widen_what_the_gateway_allows(self):
+        """The planner decides from a snapshot. If the world has moved since,
+        the gateway catches it, which is why a stale planner is tolerable."""
+        proposal = self.incident.propose(
+            "network.isolate", "vm-a", "Bulk capture observed.", ["libvirt:vm-a"]
+        )
+        capability = self.incident.issue(proposal, self.incident.evaluate(proposal))
+        self.plane.edges.append(
+            {"source": "service-b", "target": "vm-a", "relation": "depends_on"}
+        )
+        gateway = Gateway(
+            self.plane, self.incident.store, enforce_privsep=False
+        )
+        refused = gateway.consume(capability["id"], capability["nonce"])
+        self.assertEqual(refused["result"], "HOLD_CONTEXT_CHANGED")
+        self.assertEqual(self.plane.calls, [])
+
+    def test_no_topology_published_yet(self):
+        with self.assertRaises(RuntimeError):
+            LiveIncident(plane=None, store=MemoryStore()).topology()
+
+
+class SuspectTest(unittest.TestCase):
+    """Target selection reads hypervisor signal only, and is a placeholder for
+    a model rather than a detector worth trusting."""
+
+    def observations(self, counts):
+        return [
+            {
+                "event_type": "hypervisor.observed",
+                "target_id": target,
+                "trust_level": "hypervisor",
+                "snapshots": count,
+            }
+            for target, count in counts.items()
+        ]
+
+    def topology(self, links=None):
+        return {
+            "nodes": {
+                name: {"id": name, "kind": "domain", "link": (links or {}).get(name, "up")}
+                for name in ("vm-a", "vm-b")
+            },
+            "edges": [],
+        }
+
+    def test_the_busiest_snapshot_target_is_chosen(self):
+        target, why = _suspect(
+            self.observations({"vm-a": 1, "vm-b": 7}), self.topology()
+        )
+        self.assertEqual(target, "vm-b")
+        self.assertIn("7 snapshots", why)
+
+    def test_an_already_contained_guest_is_not_chosen_again(self):
+        target, _ = _suspect(
+            self.observations({"vm-a": 1, "vm-b": 7}),
+            self.topology(links={"vm-b": "down"}),
+        )
+        self.assertEqual(target, "vm-a")
+
+    def test_no_signal_means_no_proposal(self):
+        self.assertEqual(
+            _suspect(self.observations({"vm-a": 0, "vm-b": 0}), self.topology()),
+            (None, ""),
+        )
+
+    def test_guest_reports_are_never_considered(self):
+        """A guest could claim anything; only hypervisor entries are read."""
+        forged = [
+            {
+                "event_type": "guest.reported",
+                "target_id": "vm-a",
+                "trust_level": "guest",
+                "snapshots": 999,
+            }
+        ]
+        self.assertEqual(_suspect(forged, self.topology()), (None, ""))

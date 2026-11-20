@@ -23,6 +23,7 @@ authority and the refusal names the node responsible.
 import fcntl
 import json
 import os
+import socket
 import socketserver
 import time
 from contextlib import contextmanager
@@ -187,14 +188,14 @@ class FileStore:
         self.path = path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         if not os.path.exists(path):
-            self._write({"capabilities": {}, "entries": []})
+            self._write({"capabilities": {}, "entries": [], "topology": None})
 
     def _read(self):
         try:
             with open(self.path) as handle:
                 return json.load(handle)
         except (OSError, ValueError):
-            return {"capabilities": {}, "entries": []}
+            return {"capabilities": {}, "entries": [], "topology": None}
 
     def _write(self, data):
         temporary = f"{self.path}.tmp"
@@ -222,6 +223,22 @@ class FileStore:
     @property
     def capabilities(self):
         return self._read()["capabilities"]
+
+    def topology(self):
+        """The last topology the sensor published.
+
+        The planner reads the world from here because it has no hypervisor of
+        its own. That its view may be stale is not a defect to be fixed: the
+        gateway revalidates against live libvirt at the instant of
+        consumption, so a planner reasoning from an out-of-date or even a
+        tampered snapshot cannot cause an action the current world forbids.
+        """
+        return self._read().get("topology")
+
+    def publish_topology(self, topology):
+        with self._locked() as data:
+            data["topology"] = topology
+        return topology
 
     def get(self, capability_id):
         return self._read()["capabilities"].get(capability_id)
@@ -274,7 +291,26 @@ def serve(plane, store, socket_path, enforce_privsep=True):
         os.unlink(socket_path)
     os.makedirs(os.path.dirname(socket_path) or ".", exist_ok=True)
     server = Server(socket_path, Handler)
-    # Group-readable only: the planner's account is the only other member, so
-    # no other local user can even attempt a consumption.
+    # Group-readable only, so no local user outside the shared group can even
+    # attempt a consumption.
+    try:
+        import grp
+
+        os.chown(socket_path, -1, grp.getgrnam("aegis").gr_gid)
+    except (ImportError, KeyError, PermissionError, OSError):
+        pass
     os.chmod(socket_path, 0o660)
     return server
+
+
+def request(socket_path, payload, timeout=60):
+    """Ask the gateway for something, over its one-operation socket."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(socket_path)
+        client.sendall((json.dumps(payload) + "\n").encode())
+        with client.makefile("r") as stream:
+            line = stream.readline()
+    if not line:
+        raise PlaneError(f"the gateway at {socket_path} closed without answering")
+    return json.loads(line)

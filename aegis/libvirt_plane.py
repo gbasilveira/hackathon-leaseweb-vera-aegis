@@ -265,6 +265,9 @@ class LibvirtControlPlane(ControlPlane):
                     "state": STATES.get(domain.state()[0], "unknown"),
                     "links": {i["device"] or i["mac"]: i["link"] for i in interfaces},
                     "counters": counters,
+                    # Snapshot count is hypervisor-side and is the signal the
+                    # bulk-capture pattern actually leaves behind.
+                    "snapshots": domain.snapshotNum(),
                 }
             )
         return observations

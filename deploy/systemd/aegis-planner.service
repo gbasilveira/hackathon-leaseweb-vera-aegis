@@ -13,7 +13,8 @@ After=network-online.target
 [Service]
 Type=simple
 User=aegis-planner
-Group=aegis-planner
+Group=aegis
+UMask=0002
 WorkingDirectory=/opt/aegis
 ExecStart=/usr/bin/python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json plan
 
@@ -21,7 +22,7 @@ ExecStart=/usr/bin/python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.js
 # never committed. Create it with:
 #   install -m 600 -o aegis-planner -g aegis-planner /dev/null /etc/aegis/planner.env
 #   printf 'ANTHROPIC_API_KEY=%s\n' "$KEY" > /etc/aegis/planner.env
-EnvironmentFile=/etc/aegis/planner.env
+EnvironmentFile=-/etc/aegis/planner.env
 
 # Hypervisor denied by namespace.
 InaccessiblePaths=/run/libvirt /var/run/libvirt /etc/libvirt

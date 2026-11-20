@@ -12,10 +12,17 @@ Requires=libvirtd.service
 [Service]
 Type=simple
 User=aegis-gateway
-Group=aegis-gateway
+# The shared group owns the state store and this unit's socket, so the
+# planner can reach the gateway without holding anything else it has.
+Group=aegis
 SupplementaryGroups=libvirt
+UMask=0002
+# systemd creates and owns /run/aegis, so the socket lands somewhere the
+# gateway may write and only the shared group may reach.
+RuntimeDirectory=aegis
+RuntimeDirectoryMode=0750
 WorkingDirectory=/opt/aegis
-ExecStart=/usr/bin/python3 -m aegis.gateway_service --uri qemu:///system
+ExecStart=/usr/bin/python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json gateway
 
 # No model credentials are provided and none are inherited: a systemd unit does
 # not see an operator's shell environment.

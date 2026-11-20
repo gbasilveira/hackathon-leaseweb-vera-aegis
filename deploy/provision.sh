@@ -25,6 +25,11 @@ GUESTS="tenant-b--app:$SHARED_NET:tenant-b:normal
 tenant-c--svc:$SHARED_NET:tenant-c:critical
 tenant-b--sandbox:$PRIVATE_NET:tenant-b:normal"
 USERS="aegis-sensor aegis-planner aegis-gateway demo-attacker"
+# The three services share one group so they can share the state store and the
+# gateway's socket. It grants nothing else: libvirt access and network egress
+# are still decided per unit.
+SHARED_GROUP=aegis
+STATE="$BASE_DIR/state.json"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -47,6 +52,7 @@ if [ "${1:-}" = "--destroy" ]; then
     note "removed network $net"
   done
   for user in $USERS; do userdel "$user" >/dev/null 2>&1 || true; done
+  groupdel "$SHARED_GROUP" >/dev/null 2>&1 || true
   rm -rf "$BASE_DIR"
   say "Done."
   exit 0
@@ -148,20 +154,29 @@ XML
   virsh start "$name" >/dev/null 2>&1 || true
 done
 
-say "5 · Service catalogue"
+say "5 · Shared state"
+getent group "$SHARED_GROUP" >/dev/null 2>&1 || groupadd --system "$SHARED_GROUP"
 mkdir -p "$BASE_DIR"
 [ -f "$CATALOGUE" ] || echo '{"nodes": {}, "edges": []}' > "$CATALOGUE"
-# The walkthrough writes here, so it must be writable by the libvirt group
-# rather than by root alone. A root-owned 0644 file leaves the operator able to
-# read the catalogue and unable to run the demonstration.
-chgrp libvirt "$CATALOGUE" 2>/dev/null || true
-chmod 664 "$CATALOGUE"
+[ -f "$STATE" ] || echo '{"capabilities": {}, "entries": [], "topology": null}' > "$STATE"
+# The services run as three different accounts and all three write here, so the
+# directory carries the shared group and the setgid bit: files created by one
+# stay writable by the others. A root-owned 0755 directory is what made the
+# sensor die on its first write.
+chown -R "root:$SHARED_GROUP" "$BASE_DIR"
+chmod 2775 "$BASE_DIR"
+chmod 664 "$CATALOGUE" "$STATE"
+note "state directory $BASE_DIR is root:$SHARED_GROUP 2775"
 note "catalogue at $CATALOGUE (the CMDB stand-in; the walkthrough writes here)"
 
 say "6 · Accounts for the privilege split"
 for user in $USERS; do
   id "$user" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$user"
 done
+for user in aegis-sensor aegis-planner aegis-gateway; do
+  usermod -aG "$SHARED_GROUP" "$user"
+done
+note "the three services share group $SHARED_GROUP for state and the socket"
 # Only the gateway gets the writable hypervisor socket. The sensor is left out
 # of the group on purpose: libvirt's read-only socket is world-readable, which
 # is exactly the access the sensor is allowed to have. The planner is denied
@@ -177,7 +192,8 @@ note "aegis-gateway and demo-attacker are in the libvirt group"
 # three systemd units, not this CLI.
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
   usermod -aG libvirt "$SUDO_USER"
-  note "added $SUDO_USER to the libvirt group: log out and back in, or use sudo"
+  usermod -aG "$SHARED_GROUP" "$SUDO_USER"
+  note "added $SUDO_USER to libvirt and $SHARED_GROUP: log out and back in, or use sudo"
 fi
 note "aegis-sensor has read-only socket access only"
 note "aegis-planner is denied libvirt by InaccessiblePaths in its unit"
@@ -190,3 +206,6 @@ echo "  python3 -m aegis.live --catalogue $CATALOGUE topology"
 echo "  python3 -m aegis.live --catalogue $CATALOGUE privileges"
 echo "  python3 -m aegis.live --catalogue $CATALOGUE demo --target tenant-b--app"
 echo "  sudo -u demo-attacker ./deploy/attacker.sh tenant-b--app"
+echo
+echo "For the three-process deployment:"
+echo "  sudo ./deploy/install-services.sh"

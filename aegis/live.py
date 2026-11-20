@@ -90,14 +90,42 @@ class LiveIncident:
     the tests; `privsep` is what keeps the deployed split honest.
     """
 
-    def __init__(self, plane, store=None, clock=time.time, enforce_privsep=False):
+    def __init__(
+        self,
+        plane=None,
+        store=None,
+        clock=time.time,
+        enforce_privsep=False,
+        topology=None,
+    ):
         self.plane = plane
         self.store = store or MemoryStore()
         self.clock = clock
-        self.gateway = Gateway(
-            plane, self.store, clock=clock, enforce_privsep=enforce_privsep
+        self._topology = topology
+        # Without a plane there is no gateway here: the planner runs in a
+        # process that holds no hypervisor access at all and reaches the real
+        # gateway over its socket instead.
+        self.gateway = (
+            Gateway(plane, self.store, clock=clock, enforce_privsep=enforce_privsep)
+            if plane is not None
+            else None
         )
         self.issued = 0
+
+    def topology(self):
+        """Where this process gets its picture of the world.
+
+        The planner is given a snapshot the sensor published, because it cannot
+        open libvirt. That snapshot may be stale, and it does not matter: the
+        gateway recomputes the scoped digest from live libvirt when the handle
+        is spent, so a planner reasoning from an old or even a doctored view
+        cannot produce an action the current world forbids.
+        """
+        if self._topology is not None:
+            return self._topology() if callable(self._topology) else self._topology
+        if self.plane is None:
+            raise RuntimeError("no topology source: pass a plane or a published one")
+        return self.plane.discover()
 
     def propose(self, action, target, rationale, evidence=()):
         proposal = {
@@ -115,7 +143,7 @@ class LiveIncident:
 
     def evaluate(self, proposal):
         decision = decide(
-            self.plane.discover(),
+            self.topology(),
             proposal["action_type"],
             proposal["target_id"],
             proposal["evidence_refs"],
@@ -166,7 +194,27 @@ class LiveIncident:
         return capability
 
     def execute(self, capability):
+        if self.gateway is None:
+            raise RuntimeError("this process holds no plane; use execute_remote")
         return self.gateway.consume(capability["id"], capability["nonce"])
+
+    def execute_remote(self, capability, socket_path):
+        """Ask the gateway process to spend a handle on our behalf.
+
+        All that crosses the socket is an identifier and a nonce. The rationale,
+        the evidence and anything else the planner wrote stay on this side, so
+        there is no text channel from the planner into the actuator.
+        """
+        from .gateway import request
+
+        return request(
+            socket_path,
+            {
+                "op": "consume",
+                "capability_id": capability["id"],
+                "nonce": capability["nonce"],
+            },
+        )
 
     def evidence(self):
         report = verify_chain(self.store.entries)
@@ -442,6 +490,7 @@ def cmd_observe(args):
     plane = _plane(args)
     store = FileStore(args.store)
     while True:
+        store.publish_topology(plane.discover())
         separated = authority_facts(plane.observe())
         for fact in separated["facts"]:
             store.journal(dict(fact, event_type="hypervisor.observed", outcome="observed"))
@@ -450,8 +499,8 @@ def cmd_observe(args):
                 dict(ignored, event_type="guest.reported", outcome="excluded_from_decisions")
             )
         _say(
-            f"sealed {len(separated['facts'])} hypervisor observation(s), "
-            f"excluded {len(separated['excluded'])} guest report(s)"
+            f"published topology, sealed {len(separated['facts'])} hypervisor "
+            f"observation(s), excluded {len(separated['excluded'])} guest report(s)"
         )
         if args.once:
             return 0
@@ -473,6 +522,78 @@ def cmd_gateway(args):
     except KeyboardInterrupt:
         server.shutdown()
     return 0
+
+
+def _suspect(entries, topology):
+    """Pick a containment target from sealed hypervisor observations.
+
+    This is a placeholder for a model, and a deliberately crude one. It keys on
+    the signal the bulk-capture pattern actually leaves on a hypervisor, a
+    climbing snapshot count, and it reads nothing a guest could have written.
+
+    Detection quality is the weakest part of this system and nothing here
+    claims otherwise. What the architecture guarantees is that a wrong answer
+    from this function cannot produce an action policy forbids.
+    """
+    latest = {}
+    for entry in entries:
+        if entry.get("event_type") == "hypervisor.observed" and entry.get("target_id"):
+            latest[entry["target_id"]] = entry
+    best, reason = None, ""
+    for target, observation in sorted(latest.items()):
+        node = topology.get("nodes", {}).get(target, {})
+        if node.get("link") == "down":
+            continue  # already contained
+        count = observation.get("snapshots") or 0
+        if count and (best is None or count > (latest[best].get("snapshots") or 0)):
+            best = target
+            reason = f"{count} snapshots observed on this guest"
+    return best, reason
+
+
+def cmd_plan(args):
+    """Propose containment from sealed observations, holding no hypervisor.
+
+    This process cannot open libvirt, cannot actuate and cannot approve. It
+    reads what the sensor published, proposes, evaluates against that published
+    view, mints a handle and asks the gateway to spend it. Every one of those
+    steps is checked again on the other side of the socket.
+    """
+    from .gateway import FileStore
+    from .privsep import assert_role
+
+    assert_role("planner", args.uri, enforce=not args.no_privsep)
+    store = FileStore(args.store)
+    while True:
+        topology = store.topology()
+        if not topology:
+            _say("no topology published yet; is the sensor running?")
+        else:
+            incident = LiveIncident(store=store, topology=topology)
+            target, why = _suspect(store.entries, topology)
+            if not target:
+                _say("no anomaly in the sealed hypervisor observations")
+            else:
+                _say(f"suspect {target}: {why}")
+                proposal = incident.propose(
+                    args.action, target, why, [f"libvirt:{target}"]
+                )
+                decision = incident.evaluate(proposal)
+                _say(f"  -> {decision['result']} / {decision['reason']}")
+                capability = incident.issue(proposal, decision)
+                if capability is None:
+                    _say("  no handle issued; nothing is asked of the gateway")
+                else:
+                    try:
+                        answer = incident.execute_remote(capability, args.socket)
+                        _say(f"  gateway: {answer['result']}")
+                        for line in answer.get("reasons", []):
+                            _say(f"    · {line}")
+                    except OSError as error:
+                        _say(f"  gateway unreachable at {args.socket}: {error}")
+        if args.once:
+            return 0
+        time.sleep(args.interval)
 
 
 def cmd_release(args):
@@ -540,6 +661,11 @@ def main(argv=None):
     observe.add_argument("--once", action="store_true")
     observe.set_defaults(run=cmd_observe)
     sub.add_parser("gateway").set_defaults(run=cmd_gateway)
+    plan = sub.add_parser("plan")
+    plan.add_argument("--action", default="network.isolate", choices=sorted(ACTIONS))
+    plan.add_argument("--interval", type=float, default=15.0)
+    plan.add_argument("--once", action="store_true")
+    plan.set_defaults(run=cmd_plan)
     release = sub.add_parser("release")
     release.add_argument("--target", required=True)
     release.add_argument("--action", default="network.restore", choices=sorted(ACTIONS))

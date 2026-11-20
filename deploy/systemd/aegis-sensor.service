@@ -12,7 +12,8 @@ Requires=libvirtd.service
 [Service]
 Type=simple
 User=aegis-sensor
-Group=aegis-sensor
+Group=aegis
+UMask=0002
 WorkingDirectory=/opt/aegis
 ExecStart=/usr/bin/python3 -m aegis.live --read-only --catalogue /var/lib/aegis/catalogue.json observe
 

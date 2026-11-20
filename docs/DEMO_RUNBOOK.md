@@ -42,6 +42,27 @@ denial in act 2 follows from it arithmetically.
 | 3:30–4:30 | Same run, acts 6 and 7 | A critical tenant-c service starts depending on the target. The pending handle is refused, and the refusal names that service and says the blast radius moved from one tenant to two. Re-evaluated, the same proposal is now denied outright. |
 | 4:30–5:00 | Same run, act 8 | The sealed journal, its head, and an entry edited live so the chain breaks at a named index. |
 
+### The three processes
+
+The table above runs one process that both decides and actuates, which is the
+right shape for a walkthrough and the wrong shape for a deployment. For the
+deployed split, `sudo ./deploy/install-services.sh`, then:
+
+```sh
+sudo journalctl -u aegis-sensor -u aegis-planner -u aegis-gateway -f
+```
+
+The sensor publishes topology and sealed observations. The planner reads that
+published view, because it holds no hypervisor access at all, proposes against
+it, and asks the gateway over a socket that accepts one operation and carries
+only an identifier and a nonce. The gateway recomputes the scoped digest from
+live libvirt before spending anything.
+
+The point worth making is that the planner's view is allowed to be wrong. It
+can be stale, and a compromised planner can doctor it. Neither widens what the
+gateway permits, because the gateway does not trust the snapshot the decision
+was made against; it checks the world itself at the instant of use.
+
 Two sentences worth saying out loud. The model never holds a credential: it
 proposes, and the only thing that can act is a single-use handle bound to a hash
 of the request and of the observed world, revalidated at the instant of use. We
