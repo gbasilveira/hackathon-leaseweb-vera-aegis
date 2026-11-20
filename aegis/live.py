@@ -19,68 +19,8 @@ import time
 from .chain import verify_chain
 from .controlplane import ACTIONS, REVERSIBLE
 from .gateway import Gateway, MemoryStore
+from .policy import CAPABILITY_TTL, POLICY_DIGEST, decide, facts
 from .scope import explain, scoped_digest, sha
-
-#: Priority-ordered rules. The first match wins, and the default is denial.
-POLICY = [
-    (100, "DENY_UNPUBLISHED_ACTION", "DENY", lambda f: not f["published"]),
-    (90, "DENY_SHARED_RESOURCE", "DENY", lambda f: f["target_shared"]),
-    (85, "DENY_CRITICAL_SHARED_DEPENDENCY", "DENY", lambda f: f["critical_shared"]),
-    (80, "DENY_CROSS_TENANT_BLAST", "DENY", lambda f: f["tenant_count"] > 1),
-    (70, "DENY_UNKNOWN_TARGET", "DENY", lambda f: not f["target_known"]),
-    (60, "HOLD_NO_EVIDENCE", "HOLD", lambda f: not f["evidence_ok"]),
-    (50, "REQUIRE_APPROVAL_IRREVERSIBLE", "REQUIRE_APPROVAL", lambda f: not f["reversible"]),
-    (40, "ALLOW_SCOPED_REVERSIBLE", "ALLOW", lambda f: f["reversible"]),
-    (0, "DENY_DEFAULT", "DENY", lambda f: True),
-]
-POLICY_DIGEST = sha([[priority, reason, result] for priority, reason, result, _ in POLICY])
-CAPABILITY_TTL = 300
-
-
-def facts(topology, action, target, evidence=()):
-    """Authority facts, every one of them derived from observation."""
-    nodes, edges = topology["nodes"], topology["edges"]
-    _, observed = scoped_digest(nodes, edges, target)
-    node = nodes.get(target, {})
-    owner = node.get("tenant_id")
-    blast = [tenant for tenant in observed["tenants"] if tenant != "infrastructure"]
-    return {
-        "action": action,
-        "published": action in ACTIONS,
-        "reversible": action in REVERSIBLE,
-        "target_known": bool(node),
-        "target_tenant": owner,
-        "target_shared": bool(node.get("shared")),
-        "critical_shared": any(
-            nodes[member].get("shared") and nodes[member].get("criticality") == "critical"
-            for member in observed["members"]
-            if member in nodes
-        ),
-        "tenant_count": len(blast),
-        "blast_tenants": blast,
-        "closure": observed["members"],
-        "evidence_ok": bool(evidence),
-    }
-
-
-def decide(topology, action, target, evidence=()):
-    """Evaluate a proposal against measured context."""
-    derived = facts(topology, action, target, evidence)
-    digest, observed = scoped_digest(topology["nodes"], topology["edges"], target)
-    for priority, reason, result, predicate in POLICY:
-        if predicate(derived):
-            return {
-                "result": result,
-                "reason": reason,
-                "priority": priority,
-                "policy_digest": POLICY_DIGEST,
-                "context_digest": digest,
-                "context": observed,
-                "facts": derived,
-                "at": time.time(),
-            }
-    raise AssertionError("the default rule must always match")
-
 
 class LiveIncident:
     """Planner, governance and gateway, wired to one plane.
@@ -173,6 +113,7 @@ class LiveIncident:
             "action_type": proposal["action_type"],
             "target_id": proposal["target_id"],
             "proposal_hash": proposal["hash"],
+            "evidence_refs": list(proposal["evidence_refs"]),
             "policy_digest": decision["policy_digest"],
             "context_digest": decision["context_digest"],
             "context": decision["context"],
@@ -278,6 +219,24 @@ def _catalogue_add(path, entry):
     _catalogue_write(path, declared)
 
 
+def _seal_observations(plane, store):
+    """Seal the plane's current hypervisor observations, as the sensor would.
+
+    The walkthrough and the release path run without the sensor service, but
+    the gateway checks that cited evidence exists in the sealed journal and
+    concerns the target. Fabricating an identifier here would be the exact
+    thing tests/test_sabotage.py forbids, so these paths record real
+    observations instead.
+    """
+    from .controlplane import authority_facts
+
+    sealed = {}
+    for fact in authority_facts(plane.observe())["facts"]:
+        store.journal(dict(fact, event_type="hypervisor.observed", outcome="observed"))
+        sealed[fact["target_id"]] = fact["id"]
+    return sealed
+
+
 def _say(text=""):
     print(text, flush=True)
 
@@ -361,6 +320,7 @@ def cmd_demo(args):
         _catalogue_add(catalogue, entry)
 
     reset()
+    evidence = _seal_observations(plane, incident.store)
     topology = plane.discover()
     _act(1, "Measured topology")
     shared = [n for n in topology["nodes"].values() if n.get("shared")]
@@ -378,7 +338,10 @@ def cmd_demo(args):
     wide = "network.isolate" if broad else "host.stop"
     broad = broad or topology["host"]
     proposal = incident.propose(
-        wide, broad, "An untrusted log asked for a wide containment.", ["obs-1"]
+        wide,
+        broad,
+        "An untrusted log asked for a wide containment.",
+        [evidence.get(broad)] if evidence.get(broad) else [],
     )
     decision = incident.evaluate(proposal)
     _say(f"proposal: {wide} on {broad}")
@@ -388,7 +351,7 @@ def cmd_demo(args):
 
     _act(3, "The scoped action, and the handle it earns")
     proposal = incident.propose(
-        action, target, "Contain the implicated guest only.", ["obs-1"]
+        action, target, "Contain the implicated guest only.", [evidence[target]]
     )
     decision = incident.evaluate(proposal)
     _say(f"proposal: {action} on {target}")
@@ -441,7 +404,7 @@ def cmd_demo(args):
         "network.restore" if action == "network.isolate" else "vm.resume",
         target,
         "Release containment after review.",
-        ["obs-1"],
+        [evidence[target]],
     )
     decision = incident.evaluate(restore)
     pending = incident.issue(restore, decision)
@@ -644,8 +607,12 @@ def cmd_release(args):
         _say(f"removed the walkthrough's catalogue entries: {', '.join(DEMO_NODES)}")
         _say("the dependency that revoked the pending handle is gone")
 
+    evidence = _seal_observations(plane, incident.store)
+    if args.target not in evidence:
+        _say(f"no hypervisor observation for {args.target}; is the guest defined?")
+        return 1
     proposal = incident.propose(
-        args.action, args.target, "Release containment after review.", ["obs-1"]
+        args.action, args.target, "Release containment after review.", [evidence[args.target]]
     )
     decision = incident.evaluate(proposal)
     _say()

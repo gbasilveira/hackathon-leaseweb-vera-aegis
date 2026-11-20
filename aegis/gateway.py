@@ -28,8 +28,9 @@ import socketserver
 import time
 from contextlib import contextmanager
 
-from .chain import link
+from .chain import link, verify_chain
 from .controlplane import REVERSIBLE, PlaneError
+from .policy import decide
 from .scope import explain, scoped_digest
 from . import privsep
 
@@ -69,17 +70,92 @@ class Gateway:
         ) | {"result": reason, "reasons": list(detail)}
 
     def revalidate(self, capability):
-        """Why this capability may not be spent right now, or None."""
+        """Why this capability may not be spent right now, or None.
+
+        A capability record lives in a store the planner can write to, so it is
+        a request and never an authority. Everything below that could have been
+        written by the planner is therefore treated as a claim, and the gateway
+        settles every question that matters from the hypervisor it alone can
+        read.
+
+        An earlier version of this method checked only that the world had not
+        *changed* since whatever digest the record claimed. A compromised
+        planner could compute an honest digest of the current world, write a
+        capability for an action the policy forbids, and the gateway would
+        execute it. A sabotage test now asserts that it cannot.
+        """
         if capability["status"] != "issued":
             return f"DENY_{capability['status'].upper()}", []
         if capability["expires_at"] <= self.clock():
             return "DENY_EXPIRED", []
+
+        # Tampered history disables the actuator. The journal is the evidence a
+        # decision rests on, so if its chain is broken the gateway has no
+        # grounds to act on anything.
+        chain = verify_chain(self.store.entries)
+        if not chain["ok"]:
+            return "DENY_EVIDENCE_TAMPERED", [
+                f"journal chain broken at index {chain['broken_at']}: {chain['detail']}"
+            ]
+
+        # Evidence must exist in the sealed journal, and at least one piece of
+        # it must concern the target being acted on. This does not establish
+        # that containment was warranted, which is a detection question; it
+        # establishes that the action is tied to observations that were really
+        # recorded about that guest, rather than to a reference invented
+        # alongside the handle.
+        refs = set(capability.get("evidence_refs") or [])
+        sealed, about_target = set(), set()
+        for entry in self.store.entries:
+            if entry.get("event_type") != "hypervisor.observed":
+                continue
+            sealed.add(entry.get("id"))
+            if entry.get("target_id") == capability["target_id"]:
+                about_target.add(entry.get("id"))
+        if (unknown := sorted(refs - sealed)):
+            return "DENY_EVIDENCE_UNKNOWN", [
+                f"cited evidence is not in the sealed journal: {', '.join(unknown)}"
+            ]
+        if refs and not refs & about_target:
+            return "DENY_EVIDENCE_UNRELATED", [
+                f"no cited evidence concerns {capability['target_id']}"
+            ]
+
         topology = self.plane.discover()
+
+        # Drift first. Both this and the policy re-decision below run, and both
+        # must pass, so a forged record carrying an honest digest of the
+        # current world still has to survive the policy. Drift is checked first
+        # only because its explanation names the node that cost this handle its
+        # authority, which tells an operator more than a rule name does.
         observed_digest, observed = scoped_digest(
             topology["nodes"], topology["edges"], capability["target_id"]
         )
         if observed_digest != capability["context_digest"]:
-            return "HOLD_CONTEXT_CHANGED", explain(capability["context"], observed)
+            return "HOLD_CONTEXT_CHANGED", explain(
+                capability.get("context") or {}, observed
+            )
+
+        # The authoritative check. The gateway runs the policy itself against
+        # the topology it just read, so authority cannot be invented by
+        # whoever wrote the record.
+        verdict = decide(
+            topology,
+            capability["action_type"],
+            capability["target_id"],
+            capability.get("evidence_refs") or [],
+        )
+        if verdict["result"] != "ALLOW":
+            return f"DENY_POLICY_{verdict['reason']}", [
+                f"the gateway re-ran the policy and got {verdict['result']}",
+                f"blast radius: {verdict['facts']['tenant_count']} tenant(s) "
+                f"{verdict['facts']['blast_tenants']}",
+                f"closure: {verdict['facts']['closure']}",
+            ]
+        if verdict["policy_digest"] != capability.get("policy_digest"):
+            return "HOLD_POLICY_CHANGED", [
+                "the rules in force are not the rules this handle was issued under"
+            ]
         return None, []
 
     def consume(self, capability_id, nonce):

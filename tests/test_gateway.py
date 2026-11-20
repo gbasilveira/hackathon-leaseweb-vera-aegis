@@ -8,6 +8,7 @@ from unittest.mock import patch
 from aegis.chain import verify_chain
 from aegis.controlplane import PlaneError
 from aegis.gateway import Gateway, MemoryStore
+from aegis.policy import POLICY_DIGEST
 from aegis.privsep import PrivilegeError
 from aegis.scope import scoped_digest
 
@@ -71,6 +72,21 @@ class GatewayTest(unittest.TestCase):
         )
 
     def mint(self, action="network.isolate", target="vm-a", ttl=300):
+        """Issue a handle the way the planner does, with sealed evidence.
+
+        The gateway re-runs the policy and checks evidence provenance, so a
+        handle minted without either is correctly refused; see
+        tests/test_sabotage.py.
+        """
+        self.store.journal(
+            {
+                "id": f"libvirt:{target}",
+                "event_type": "hypervisor.observed",
+                "outcome": "observed",
+                "target_id": target,
+                "trust_level": "hypervisor",
+            }
+        )
         digest, observed = scoped_digest(self.plane.nodes, self.plane.edges, target)
         return self.store.put(
             {
@@ -82,6 +98,8 @@ class GatewayTest(unittest.TestCase):
                 "expires_at": self.now + ttl,
                 "context_digest": digest,
                 "context": observed,
+                "evidence_refs": [f"libvirt:{target}"],
+                "policy_digest": POLICY_DIGEST,
             }
         )
 
@@ -145,6 +163,23 @@ class GatewayTest(unittest.TestCase):
         self.assertIn("service-b (tenant-c) now depends on vm-a", result["reasons"])
         self.assertTrue(any("blast radius" in reason for reason in result["reasons"]))
 
+    def test_same_tenant_drift_still_revokes_and_explains(self):
+        """Drift that leaves the policy verdict unchanged must still revoke, or
+        the handle would outlive the world it was judged against."""
+        self.mint()
+        self.plane.nodes["svc-b-internal"] = {
+            "id": "svc-b-internal", "kind": "service", "tenant_id": "tenant-b"
+        }
+        self.plane.edges.append(
+            {"source": "svc-b-internal", "target": "vm-a", "relation": "depends_on"}
+        )
+        result = self.gateway.consume("cap-1", "nonce-1")
+        self.assertEqual(result["result"], "HOLD_CONTEXT_CHANGED")
+        self.assertIn(
+            "svc-b-internal (tenant-b) now depends on vm-a", result["reasons"]
+        )
+        self.assertEqual(self.plane.calls, [])
+
     def test_actuator_failure_is_indeterminate_and_spends_the_handle(self):
         """A hypervisor call cannot be rolled back, so a failure must never
         leave a handle that can fire the same action again."""
@@ -175,7 +210,7 @@ class GatewayTest(unittest.TestCase):
         self.assertTrue(report["ok"], report)
         self.assertEqual(
             [entry["event_type"] for entry in self.store.entries],
-            ["outcome.verified", "gateway.refused"],
+            ["hypervisor.observed", "outcome.verified", "gateway.refused"],
         )
 
     def test_gateway_refuses_to_start_with_model_credentials(self):

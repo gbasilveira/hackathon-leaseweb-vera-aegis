@@ -105,10 +105,22 @@ class EndToEndTest(unittest.TestCase):
     def setUp(self):
         self.plane = FakePlane()
         self.incident = LiveIncident(self.plane, MemoryStore())
+        # The gateway checks evidence provenance against the sealed journal, so
+        # the sensor's observations have to exist before anything is proposed.
+        for target in ("vm-a", "net:br0"):
+            self.incident.store.journal(
+                {
+                    "id": f"libvirt:{target}",
+                    "event_type": "hypervisor.observed",
+                    "outcome": "observed",
+                    "target_id": target,
+                    "trust_level": "hypervisor",
+                }
+            )
 
     def test_propose_evaluate_issue_execute_verify(self):
         proposal = self.incident.propose(
-            "network.isolate", "vm-a", "Contain the implicated guest.", ["obs-1"]
+            "network.isolate", "vm-a", "Contain the implicated guest.", ["libvirt:vm-a"]
         )
         decision = self.incident.evaluate(proposal)
         self.assertEqual(decision["result"], "ALLOW")
@@ -120,7 +132,7 @@ class EndToEndTest(unittest.TestCase):
 
     def test_denied_proposal_issues_no_handle(self):
         proposal = self.incident.propose(
-            "network.isolate", "net:br0", "Isolate the shared bridge.", ["obs-1"]
+            "network.isolate", "net:br0", "Isolate the shared bridge.", ["libvirt:net:br0"]
         )
         decision = self.incident.evaluate(proposal)
         self.assertEqual(decision["reason"], "DENY_SHARED_RESOURCE")
@@ -128,10 +140,12 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(self.plane.calls, [])
 
     def test_every_step_is_sealed_in_order(self):
-        proposal = self.incident.propose("network.isolate", "vm-a", "Contain.", ["obs-1"])
+        proposal = self.incident.propose(
+            "network.isolate", "vm-a", "Contain.", ["libvirt:vm-a"]
+        )
         self.incident.execute(self.incident.issue(proposal, self.incident.evaluate(proposal)))
         self.assertEqual(
-            [entry["event_type"] for entry in self.incident.store.entries],
+            [entry["event_type"] for entry in self.incident.store.entries][-4:],
             ["proposal.submitted", "governance.decision", "capability.issued", "outcome.verified"],
         )
         self.assertTrue(self.incident.evidence()["chain"]["ok"])
@@ -162,7 +176,9 @@ class PlannerWithoutAPlaneTest(unittest.TestCase):
 
     def test_it_cannot_execute_anything_itself(self):
         self.assertIsNone(self.incident.gateway)
-        proposal = self.incident.propose("network.isolate", "vm-a", "x", ["e"])
+        proposal = self.incident.propose(
+            "network.isolate", "vm-a", "x", ["libvirt:vm-a"]
+        )
         capability = self.incident.issue(proposal, self.incident.evaluate(proposal))
         with self.assertRaises(RuntimeError):
             self.incident.execute(capability)
@@ -171,6 +187,15 @@ class PlannerWithoutAPlaneTest(unittest.TestCase):
     def test_a_stale_view_cannot_widen_what_the_gateway_allows(self):
         """The planner decides from a snapshot. If the world has moved since,
         the gateway catches it, which is why a stale planner is tolerable."""
+        self.incident.store.journal(
+            {
+                "id": "libvirt:vm-a",
+                "event_type": "hypervisor.observed",
+                "outcome": "observed",
+                "target_id": "vm-a",
+                "trust_level": "hypervisor",
+            }
+        )
         proposal = self.incident.propose(
             "network.isolate", "vm-a", "Bulk capture observed.", ["libvirt:vm-a"]
         )
@@ -184,6 +209,16 @@ class PlannerWithoutAPlaneTest(unittest.TestCase):
         refused = gateway.consume(capability["id"], capability["nonce"])
         self.assertEqual(refused["result"], "HOLD_CONTEXT_CHANGED")
         self.assertEqual(self.plane.calls, [])
+        # And had the digest matched, the policy re-decision would still have
+        # refused it, because the blast radius now spans two tenants.
+        from aegis.policy import decide
+
+        self.assertEqual(
+            decide(self.plane.discover(), "network.isolate", "vm-a", ["libvirt:vm-a"])[
+                "reason"
+            ],
+            "DENY_CROSS_TENANT_BLAST",
+        )
 
     def test_no_topology_published_yet(self):
         with self.assertRaises(RuntimeError):
