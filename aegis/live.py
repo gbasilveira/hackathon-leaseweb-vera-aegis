@@ -176,11 +176,20 @@ class LiveIncident:
 # -- operator console --------------------------------------------------------
 
 
-def _plane(args):
+def _plane(args, writable=True):
+    """Open the plane with the least access the command needs.
+
+    `writable=False` is not a convenience. Only the gateway's account holds
+    libvirt's writable socket, so a command that merely reads must ask for the
+    read-only one or it fails on a correctly configured host, which is exactly
+    what happened the first time `topology` ran as an unprivileged operator.
+    """
     from .libvirt_plane import LibvirtControlPlane
 
     return LibvirtControlPlane(
-        args.uri, read_only=args.read_only, catalogue=args.catalogue
+        args.uri,
+        read_only=args.read_only or not writable,
+        catalogue=args.catalogue,
     )
 
 
@@ -194,7 +203,7 @@ def _act(number, title):
 
 
 def cmd_topology(args):
-    topology = _plane(args).discover()
+    topology = _plane(args, writable=False).discover()
     _say(f"host: {topology['host']}")
     _say()
     _say(f"{'node':<34} {'kind':<14} {'tenant':<16} shared  criticality")

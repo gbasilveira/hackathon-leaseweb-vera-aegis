@@ -151,7 +151,11 @@ done
 say "5 · Service catalogue"
 mkdir -p "$BASE_DIR"
 [ -f "$CATALOGUE" ] || echo '{"nodes": {}, "edges": []}' > "$CATALOGUE"
-chmod 644 "$CATALOGUE"
+# The walkthrough writes here, so it must be writable by the libvirt group
+# rather than by root alone. A root-owned 0644 file leaves the operator able to
+# read the catalogue and unable to run the demonstration.
+chgrp libvirt "$CATALOGUE" 2>/dev/null || true
+chmod 664 "$CATALOGUE"
 note "catalogue at $CATALOGUE (the CMDB stand-in; the walkthrough writes here)"
 
 say "6 · Accounts for the privilege split"
@@ -168,6 +172,13 @@ usermod -aG libvirt aegis-gateway
 usermod -aG libvirt demo-attacker
 usermod -s /bin/sh demo-attacker
 note "aegis-gateway and demo-attacker are in the libvirt group"
+# The human running the walkthrough needs the writable socket too, because the
+# single-process driver both decides and actuates. The deployed split is the
+# three systemd units, not this CLI.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+  usermod -aG libvirt "$SUDO_USER"
+  note "added $SUDO_USER to the libvirt group: log out and back in, or use sudo"
+fi
 note "aegis-sensor has read-only socket access only"
 note "aegis-planner is denied libvirt by InaccessiblePaths in its unit"
 

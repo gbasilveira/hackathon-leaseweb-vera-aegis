@@ -37,7 +37,8 @@ no QEMU and could not reach the target host.
 
 | Priority | Operation | Completion evidence |
 |---|---|---|
-| **Next action** | On the hypervisor, run `sudo ./deploy/provision.sh`, confirm three guests reach `running` and that `aegis.live topology` reports the shared network as critical with two observed tenants. | `virsh list --all`; the topology table; boot time under TCG if `/dev/kvm` is absent. |
+| Done 20 Nov | `sudo ./deploy/provision.sh` ran on the hypervisor. Three guests reached `running` under TCG; `/dev/kvm` absent. | Operation 026 in OPERATIONS.md. |
+| **Next action** | Confirm `aegis.live topology` reports the shared network as critical naming two observed tenants. Three permission defects found on the first attempt are fixed; this is the re-run. | The topology table showing `net:aebr-shared` shared and critical with `tenant-b, tenant-c`. |
 | Before presenting | Run `aegis.live demo --target tenant-b--app --action network.isolate`. This is the first execution of `network.isolate` anywhere: it needs `virDomainUpdateDeviceFlags`, which libvirt's test driver does not implement, so it has never run. | Act 5 reporting `isolated: True` from re-read, and act 6 naming the catalogue node that revoked the pending handle. |
 | Before presenting | Install the three units from `deploy/systemd/`, create `/etc/aegis/planner.env` mode 0600, and confirm `aegis.live privileges` reports no violation for any role. | A privilege matrix with three clean rows. |
 | If tenant enforcement is in the pitch | Run `sudo ./deploy/enable-acl.sh` and confirm libvirtd refuses the attacker account on a foreign tenant's domain. | A polkit denial in the journal; `--revert` tested. |

@@ -144,7 +144,15 @@ class LibvirtControlPlane(ControlPlane):
         try:
             self.conn = virt.openReadOnly(uri) if read_only else virt.open(uri)
         except virt.libvirtError as error:
-            raise PlaneError(f"cannot reach libvirt at {uri}: {error}") from error
+            hint = ""
+            if "Permission denied" in str(error) and not read_only:
+                hint = (
+                    ". This account does not hold libvirt's writable socket, "
+                    "which is the intended boundary: only the gateway's account "
+                    "does. Add --read-only for a command that merely observes, "
+                    "or run the operator walkthrough under sudo."
+                )
+            raise PlaneError(f"cannot reach libvirt at {uri}: {error}{hint}") from error
 
     # -- observation ---------------------------------------------------------
 
