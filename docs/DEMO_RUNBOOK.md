@@ -37,7 +37,7 @@ denial in act 2 follows from it arithmetically.
 |---|---|---|
 | 0:00–0:40 | `aegis.live topology` | Three guests, three tenants, two networks. One network carries two tenants and is therefore critical. Nothing here was declared; it was read from the hypervisor. |
 | 0:40–1:10 | `aegis.live privileges` | The planner has egress and no hypervisor. The gateway has the hypervisor and no egress. Each process verified this by attempting the access it is denied. |
-| 1:10–1:40 | In a second terminal: `sudo -u demo-attacker ./deploy/attacker.sh tenant-b--app` | A legitimate operator credential, stock `virsh`, no project code. Broad enumeration, then bulk snapshots, then probing another tenant. |
+| 1:10–1:40 | In a second terminal: `sudo -u demo-attacker /opt/aegis/attacker.sh tenant-b--app` | A legitimate operator credential, stock `virsh`, no project code. Broad enumeration, then bulk snapshots, then probing another tenant. |
 | 1:40–3:30 | `aegis.live demo --target tenant-b--app` | Acts 1 to 5. The broad action is refused. The scoped one earns a single-use handle. An unrelated service dependency appears and the handle survives — the mechanism is precise, not merely strict. Then it executes, and `isolated: True` is read back from the hypervisor, not reported by the actuator. |
 | 3:30–4:30 | Same run, acts 6 and 7 | A critical tenant-c service starts depending on the target. The pending handle is refused, and the refusal names that service and says the blast radius moved from one tenant to two. Re-evaluated, the same proposal is now denied outright. |
 | 4:30–5:00 | Same run, act 8 | The sealed journal, its head, and an entry edited live so the chain breaks at a named index. |
@@ -71,7 +71,7 @@ contained:
 
 ```sh
 sudo journalctl -u aegis-sensor -u aegis-planner -u aegis-gateway -f
-sudo -u demo-attacker ./deploy/attacker.sh tenant-b--sandbox
+sudo -u demo-attacker /opt/aegis/attacker.sh tenant-b--sandbox
 ```
 
 The order of what appears is the whole argument. The sensor seals a change on
@@ -84,6 +84,10 @@ domain to confirm it.
 
 Three processes, three privilege envelopes, one sealed chain. The adversary
 shares nothing with any of them but the hypervisor.
+
+If the journal shows nothing, the adversary produced no signal. Its last
+line says so explicitly. The usual cause is running it from a path its own
+account cannot read.
 
 Release it the same way as the walkthrough:
 
