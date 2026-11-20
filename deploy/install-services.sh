@@ -34,11 +34,22 @@ say "2 · Interpreter"
 # into Debian's python: pip cannot uninstall the typing_extensions that ships
 # with the distribution, because it has no RECORD file, so the install aborts
 # halfway.
-if [ ! -x "$VENV/bin/python3" ]; then
-  python3 -m venv --system-site-packages "$VENV"
-  note "created $VENV with access to system site-packages"
+# Without python3-venv the venv module produces a tree with no working pip, so
+# the environment looks present and every install into it fails. Check for a
+# usable pip rather than for the directory.
+if ! "$VENV/bin/python3" -m pip --version >/dev/null 2>&1; then
+  [ -d "$VENV" ] && note "replacing $VENV: it has no usable pip"
+  rm -rf "$VENV"
+  python3 -m venv --system-site-packages "$VENV" 2>/dev/null \
+    || { apt-get install -y -qq python3-venv >/dev/null 2>&1 \
+         && python3 -m venv --system-site-packages "$VENV"; }
+  if "$VENV/bin/python3" -m pip --version >/dev/null 2>&1; then
+    note "created $VENV with a working pip"
+  else
+    note "WARNING: could not build a usable environment; install python3-venv"
+  fi
 else
-  note "$VENV already present"
+  note "$VENV present with a working pip"
 fi
 if "$VENV/bin/python3" -c 'import libvirt' 2>/dev/null; then
   note "libvirt binding visible inside the environment"
@@ -52,10 +63,13 @@ fi
 if "$VENV/bin/python3" -c 'import claude_agent_sdk' 2>/dev/null; then
   note "claude-agent-sdk present"
 elif [ "${WITH_CLAUDE:-1}" = 1 ]; then
-  if "$VENV/bin/pip" install -q "claude-agent-sdk==$SDK_VERSION" 2>/dev/null; then
+  # Show why, rather than swallowing it. A silent failure here is how the model
+  # planner ends up reporting itself unavailable with no explanation.
+  if "$VENV/bin/python3" -m pip install -q "claude-agent-sdk==$SDK_VERSION" 2>/tmp/aegis-sdk.log; then
     note "installed claude-agent-sdk==$SDK_VERSION"
   else
-    note "could not install the SDK; the model planner will report itself unavailable"
+    note "could not install the SDK; the model planner will be unavailable:"
+    tail -4 /tmp/aegis-sdk.log 2>/dev/null | sed 's/^/    /'
   fi
 fi
 
