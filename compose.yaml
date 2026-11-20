@@ -1,3 +1,4 @@
+name: vera-aegis
 services:
   aegis:
     build:
