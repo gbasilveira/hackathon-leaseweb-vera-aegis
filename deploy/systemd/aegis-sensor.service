@@ -1,0 +1,35 @@
+# The sensor observes the hypervisor and cannot change it.
+#
+# It is deliberately not in the libvirt group, so it reaches only libvirt's
+# world-readable read-only socket. It also has no network: every signal it
+# collects is local and hypervisor-side, which is what makes that signal
+# unforgeable by a guest.
+[Unit]
+Description=VERA Aegis hypervisor sensor
+After=libvirtd.service
+Requires=libvirtd.service
+
+[Service]
+Type=simple
+User=aegis-sensor
+Group=aegis-sensor
+WorkingDirectory=/opt/aegis
+ExecStart=/usr/bin/python3 -m aegis.live --read-only --catalogue /var/lib/aegis/catalogue.json observe
+
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+PrivateNetwork=yes
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aegis
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

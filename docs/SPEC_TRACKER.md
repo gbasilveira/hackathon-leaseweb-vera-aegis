@@ -31,3 +31,30 @@ Numbers match the original 27-section brief. **Verified** identifies exercised f
 | 25 · Acceptance A–N | Verified / External | A–E and G–L verified on development Linux, F verified with live Claude and internal MCP. M has a documented runbook and automated browser walkthrough; timed jury-VM rehearsal is outstanding. N is published on public main. |
 | 26 · Five-minute pitch | Implemented / External | DEMO_RUNBOOK.md gives timed operator actions. Browser smoke verifies the underlying interactions. Human delivery timing on the presentation hardware remains to be measured. |
 | 27 · Final delivery | Verified | Public clone, Python suites, browser, live SDK and Docker health validated. See HANDOFF.md for environment-specific remaining work. |
+
+## Live path coverage
+
+The matrix above describes the fixture replay, which is unchanged and remains
+the offline fallback. These rows describe the live control plane added on
+20 November 2026. **Validated** means exercised against a real libvirt
+connection in this repository's test suite. **Host-pending** means implemented
+and unit-tested but not yet run on a hypervisor with QEMU domains.
+
+| Spec | Status | Live implementation and qualifications |
+|---|---|---|
+| 1 · Mission | Validated | aegis/live.py drives propose, evaluate, issue, consume and verify against a real plane. 41 new tests. |
+| 3 · Architecture | Validated | aegis/controlplane.py is the adapter boundary. docs/ADR-001-live-architecture.md traces each decision. |
+| 4 · Domain | Validated | Topology is discovered from live domain XML, not declared. Shared criticality is computed from the count of observed tenants. |
+| 6 · Infrastructure | Validated / Host-pending | vm.suspend and vm.resume validated end to end with independent re-read. network.isolate and network.restore implemented through virDomainUpdateDeviceFlags and unvalidated: libvirt's test driver does not support device update, so they need a QEMU domain. vm.snapshot likewise needs qcow2 backing. |
+| 7 · Context graph | Validated | aegis/scope.py binds authority to reverse reachability. Unrelated change no longer revokes, which the previous global digest did by design and which would have made a live deployment unusable. |
+| 9 · Decisions | Validated | Seven priority-ordered rules over facts derived entirely from measurement, defaulting to denial. Reversibility is a first-class fact. |
+| 10 · Roles | Validated / Host-pending | aegis/privsep.py enforces three asymmetric roles by attempting forbidden access. The systemd units that realise the split are written and not yet installed. |
+| 12 · Impact | Validated | Closure, blast-radius tenant count and critical-shared implication all computed from the discovered graph. |
+| 13 · Gateway | Validated | Single-use handle bound to request and scoped context hashes, revalidated against the plane at consumption, committed before actuation so an unrollbackable call cannot fire twice. |
+| 14 · Context drift | Validated | A service-catalogue entry appearing mid-incident revokes a pending handle and the refusal names the node and the tenant growth. Both directions asserted. |
+| 15 · Outcome | Validated | Three-valued verification by re-reading the plane. A target that cannot be re-read is INDETERMINATE rather than FAILED. |
+| 16 · Evidence | Validated / Qualified | Hash-chained journal detecting edit, deletion and reordering. Still no external anchor: whoever owns the store can rewrite it, but not silently. |
+| 11 · Claude / MCP | Qualified | The planner's privilege envelope is defined and enforced, and the live path's proposal interface is in place. The SDK planner itself is not yet wired to this path; tests/test_agent.py also errors in this environment on SDK version drift, 0.2.172 present against 0.2.185 pinned. |
+| 17 · WebUI | Not covered | The browser console still reads the fixture path only. The live path is CLI-only. |
+| 19 · Demo scenario | Validated / Host-pending | The eight-act walkthrough runs end to end against a live connection. Act 2's shared-resource denial degrades to an unpublished-action denial on a single-tenant host, so the provisioned three-tenant fixture is required for the intended narrative. |
+| 20 · Tests | Validated | 78 collected, 68 pass. The 10 errors are pre-existing SDK version drift in tests/test_agent.py, which this work did not touch. |

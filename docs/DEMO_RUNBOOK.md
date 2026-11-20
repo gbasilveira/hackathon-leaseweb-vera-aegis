@@ -15,3 +15,43 @@ Before presenting, start the server, open the console and reset the primary scen
 “Attackers operate at machine speed. VERA enables machine-speed defense without surrendering control.”
 
 The default presentation uses **Control Plane Simulator** and **Deterministic replay** (no LLM inference). Select **Claude** for a live investigation. The high-impact proposal is a configured replay alternative. A live model may choose a narrower proposal immediately.
+
+## Live hypervisor walkthrough
+
+The table above drives the fixture replay, which needs no hypervisor and is the
+safe fallback. This section drives real QEMU guests. See
+[ADR 001](ADR-001-live-architecture.md) for why each act proves what it claims.
+
+Provision once, as root:
+
+```sh
+sudo ./deploy/provision.sh
+python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json topology
+```
+
+Confirm before presenting that the shared network is reported as critical and
+names two observed tenants. That line is the demonstration's foundation: the
+denial in act 2 follows from it arithmetically.
+
+| Time | Operator action | What to show |
+|---|---|---|
+| 0:00–0:40 | `aegis.live topology` | Three guests, three tenants, two networks. One network carries two tenants and is therefore critical. Nothing here was declared; it was read from the hypervisor. |
+| 0:40–1:10 | `aegis.live privileges` | The planner has egress and no hypervisor. The gateway has the hypervisor and no egress. Each process verified this by attempting the access it is denied. |
+| 1:10–1:40 | In a second terminal: `sudo -u demo-attacker ./deploy/attacker.sh tenant-b--app` | A legitimate operator credential, stock `virsh`, no project code. Broad enumeration, then bulk snapshots, then probing another tenant. |
+| 1:40–3:30 | `aegis.live demo --target tenant-b--app` | Acts 1 to 5. The broad action is refused. The scoped one earns a single-use handle. An unrelated service dependency appears and the handle survives — the mechanism is precise, not merely strict. Then it executes, and `isolated: True` is read back from the hypervisor, not reported by the actuator. |
+| 3:30–4:30 | Same run, acts 6 and 7 | A critical tenant-c service starts depending on the target. The pending handle is refused, and the refusal names that service and says the blast radius moved from one tenant to two. Re-evaluated, the same proposal is now denied outright. |
+| 4:30–5:00 | Same run, act 8 | The sealed journal, its head, and an entry edited live so the chain breaks at a named index. |
+
+Two sentences worth saying out loud. The model never holds a credential: it
+proposes, and the only thing that can act is a single-use handle bound to a hash
+of the request and of the observed world, revalidated at the instant of use. We
+do not claim the model's proposals are good; we claim a bad one cannot reach the
+hypervisor.
+
+Afterwards the target guest is left contained, because act 6 correctly refused
+to release it. That is the right outcome, not a loose end. Release it manually:
+
+```sh
+sudo virsh domif-setlink tenant-b--app --interface <mac> up
+sudo ./deploy/provision.sh --destroy   # or remove everything
+```

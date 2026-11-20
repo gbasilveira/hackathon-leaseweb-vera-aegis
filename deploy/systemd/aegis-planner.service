@@ -1,0 +1,45 @@
+# The planner reasons with a language model and can only propose.
+#
+# It is denied the hypervisor by namespace, not by convention:
+# InaccessiblePaths hides libvirt's sockets, including the world-readable
+# read-only one, so `privsep.inspect("planner")` observes "none" and the
+# process starts. If someone adds it to the libvirt group, the namespace still
+# hides the socket; if someone removes InaccessiblePaths, privsep refuses to
+# start the process. Two independent mechanisms have to fail together.
+[Unit]
+Description=VERA Aegis response planner
+After=network-online.target
+
+[Service]
+Type=simple
+User=aegis-planner
+Group=aegis-planner
+WorkingDirectory=/opt/aegis
+ExecStart=/usr/bin/python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json plan
+
+# The model credential lives in a file readable only by this account and is
+# never committed. Create it with:
+#   install -m 600 -o aegis-planner -g aegis-planner /dev/null /etc/aegis/planner.env
+#   printf 'ANTHROPIC_API_KEY=%s\n' "$KEY" > /etc/aegis/planner.env
+EnvironmentFile=/etc/aegis/planner.env
+
+# Hypervisor denied by namespace.
+InaccessiblePaths=/run/libvirt /var/run/libvirt /etc/libvirt
+
+# The planner does need egress to reach the model API, which is precisely the
+# privilege the gateway is denied.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aegis
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

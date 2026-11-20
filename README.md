@@ -46,9 +46,31 @@ python -m aegis --db /tmp/aegis.sqlite reset secondary-scenario
 
 To import, give the exported configuration a new scenario ID and run `python -m aegis config-import /path/to/config.json` from a writable checkout. Restart the UI to refresh the catalog.
 
+## Run against real QEMU guests
+
+The sections above run the deterministic fixture replay, which needs no
+hypervisor. To run the live system against real guests on a Linux host with
+libvirt:
+
+```sh
+sudo ./deploy/provision.sh
+python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json topology
+python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json privileges
+python3 -m aegis.live --catalogue /var/lib/aegis/catalogue.json demo --target tenant-b--app
+```
+
+Topology is discovered from libvirt rather than declared, containment drops
+guest interface links, and authority is bound to the impact closure of the
+action so that unrelated change does not revoke a pending grant. The adversary
+runs as its own account through stock `virsh` and shares no code with the
+defence. See [ADR 001](docs/ADR-001-live-architecture.md) for each decision and
+what it does and does not prove, and the
+[live walkthrough](docs/DEMO_RUNBOOK.md#live-hypervisor-walkthrough) to present
+it.
+
 ## Documentation
 
-- [Architecture and generated topology](docs/README_ARCHITECTURE.md)
+- [Live architecture decisions](docs/ADR-001-live-architecture.md) and [architecture with generated topology](docs/README_ARCHITECTURE.md)
 - [Deployment](docs/DEPLOYMENT.md) and [tests](docs/TESTING.md)
 - [Scenario configuration](docs/SCENARIO_SCHEMA.md) and [attack narrative](docs/ATTACK_CHAIN.md)
 - [Governance](docs/GOVERNANCE.md) and [limitations](docs/LIMITATIONS.md)

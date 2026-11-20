@@ -1,0 +1,45 @@
+# The gateway holds the only writable hypervisor socket in the system.
+#
+# It is given no network of any kind. That is the load-bearing line in this
+# file: even if a model credential were leaked into its environment, and even
+# if its code were replaced, it has no route to any model API or to anything
+# else off this host. It can change guests and nothing more.
+[Unit]
+Description=VERA Aegis execution gateway
+After=libvirtd.service
+Requires=libvirtd.service
+
+[Service]
+Type=simple
+User=aegis-gateway
+Group=aegis-gateway
+SupplementaryGroups=libvirt
+WorkingDirectory=/opt/aegis
+ExecStart=/usr/bin/python3 -m aegis.gateway_service --uri qemu:///system
+
+# No model credentials are provided and none are inherited: a systemd unit does
+# not see an operator's shell environment.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Unix sockets only, and no addressable network. The gateway cannot phone out.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+PrivateNetwork=yes
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/aegis
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
