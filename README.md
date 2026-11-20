@@ -60,3 +60,7 @@ To import, give the exported configuration a new scenario ID and run `python -m 
 - [Licensing](docs/LICENSING.md)
 
 Original application code is Apache-2.0. Third-party components retain their own terms.
+
+## Engineering handoff
+
+See the [continuation checkpoint](docs/HANDOFF.md), [specification coverage](docs/SPEC_TRACKER.md) and [operation history](docs/OPERATIONS.md) for verified behavior, pending environment checks and the next operation.

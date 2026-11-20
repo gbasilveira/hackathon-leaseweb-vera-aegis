@@ -1,0 +1,20 @@
+# Engineering operation history
+
+This log records engineering changes and verification. Exact file changes are in Git. The running system maintains its separate incident journal and manifest in SQLite. Times can be taken from Git for committed changes. Initial entries below reconstruct work performed on 20 November 2026.
+
+| ID | Specs | Operation and observed result | Durable reference |
+|---|---|---|---|
+| 001 | 1–3, 21 | Inspected empty workspace. Linux x86-64, system Python 3.14.10, Docker available, no /dev/kvm. Credential presence checked without printing its value. Initialized main. | INSTALL/diagnostic commands in README and scripts/diagnose.sh |
+| 002 | 3–10, 22 | Established module contracts and split simulator, UI and Claude work. Implemented transactional state, fixtures, bounded policy expression evaluator and gateway. | docs/IMPLEMENTATION_CONTRACTS.md; aegis/core.py and governance.py |
+| 003 | 11 | Verified official Python SDK interfaces, installed 0.2.185 in isolation, pinned optional dependencies and recorded license exceptions. | requirements-claude.txt; docs/CLAUDE-LICENSES.md |
+| 004 | 5–9, 19 | Replaced provisional fixture names with canonical scenario IDs. Corrected session/target typing, tenant grants, replay mutations, policy priorities and stable reason codes. | scenarios/; tests/test_core.py |
+| 005 | 11 | Initial live investigation read and simulated but submitted an invalid request. Tightened the proposal schema and prompt; repeated live smoke successfully submitted a proposal with no capability or execution. | scripts/smoke_claude.py; docs/MCP.md |
+| 006 | 11 | Added scoped tool projections, event provenance, prompt injection fixture, restricted builtin tools, budgets and optional external MCP. Tested a local stdio handshake and clean child environment. | tests/test_agent.py; docs/MCP.md |
+| 007 | 12–16 | Implemented digest-bound capabilities, human approval, atomic mutation, verification and manifest. Exercised initial denial, scoped execution, drift before first suspension, concurrent reuse, altered requests, expiration and policy changes. | tests/test_chain.py; scripts/demo.sh |
+| 008 | 17–18 | Implemented versioned loopback HTTP server and local graph UI. Browser testing found a missing graph endpoint and a Cytoscape/CSP layout issue. Fixed both. Added tenant toggle, permission inspection, process transitions, replay speed, pause and export. | tests/browser-smoke.cjs; docs/API.md |
+| 009 | 17, 20 | Expanded fixture length exposed a replay-test timeout and worker/database cleanup race. Added shutdown management and adjusted the test. Primary and secondary desktop flows plus mobile sizing passed. | tests/test_web.py; tests/browser-smoke.cjs |
+| 010 | 2, 20 | Validated both JSON fixtures against the published schema. Installed application in a clean Python environment and invoked its installed CLI outside the source directory. Built offline and optional SDK Docker images. Checked optional container dependencies. | pyproject.toml; Dockerfile; scripts/install.sh |
+| 011 | 1, 25, 27 | Confirmed public GitHub destination. Default SSH session lacked agent access; selected the existing user-agent socket, checked the remote, pushed main and verified anonymous public clone. | Git commits 6bf892b, c5de319, 51f48ef |
+| 012 | 20, 25 | From a fresh public clone, ran scripts/test.sh with a clean venv (36 passed, 1 optional skip) and a second run with SDK installed (37 passed). Browser smoke passed on installed headless Chrome. | docs/TESTING.md; tests/browser-smoke.cjs |
+| 013 | 2, 11, 27 | Repeated the live synthetic smoke after final role enforcement. Claude submitted one proposal. Compose service on loopback 8765 passed health in offline configuration. Rebuilt with optional SDK. Removed the separate disposable 18765 test deployment and its own volume. | scripts/smoke_claude.py; compose.yaml |
+| 014 | 22–27 | Added durable handoff, per-section coverage, operation history and continuation instructions at the user's request. Linked them from README and AGENTS.md. | docs/HANDOFF.md; docs/SPEC_TRACKER.md |
